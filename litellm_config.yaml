@@ -1,0 +1,8 @@
+model_list:
+  - model_name: claude-sonnet-4-5
+    litellm_params:
+      model: openai/z-ai/glm-5.3-flash
+      api_base: https://integrate.api.nvidia.com/v1
+      api_key: os.environ/NVIDIA_NIM_API_KEY
+      extra_body:
+        reasoning_effort: "low"
