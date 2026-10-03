@@ -4,12 +4,14 @@
 Итерация 1: каркас проекта + ядро игры (merge-экономика, данжи, навыки, сейвы, YaGames SDK).
 
 ## Последние изменения
-- Созданы GAME_IDEA.md, GAME_SPEC.md, memory-bank
-- Выбрана концепция: merge-idle «Кузница Героев: Слияние Клинков»
+- MVP полностью собран и закоммичен: ядро (src/core), 4 сцены Phaser, YaGames SDK-обёртка, saves
+- Все проверки зелёные: 18 тестов, tsc, eslint, build, smoke-test dev-сервера
 
-## Следующие шаги
-1. Инициализация Vite+TS+Phaser проекта (package.json, tsconfig, eslint)
-2. src/core: config, economy, skills, prestige, saveSystem + тесты Vitest
-3. Сцены Phaser: Boot, Forge, Dungeon, SkillTree
-4. Обёртка YaGames SDK
-5. Сборка, тесты, коммит
+## Как запустить
+- `npm run dev` → http://localhost:5173
+- `npm run test`, `npm run build`
+
+## Следующие шаги (итерация 2)
+1. Ручной тест пользователем, сбор фидбека по балансу
+2. Частицы/анимации слияния, ежедневные награды
+3. Публикация драфта на Яндекс.Игры
