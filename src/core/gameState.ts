@@ -5,6 +5,7 @@ import { DOUBLE_INCOME_SECONDS } from './config';
 import {
   Weapon,
   offlineEarnings,
+  randomBranch,
   spawnCost,
   totalDps,
   totalIncomePerSec,
@@ -13,11 +14,62 @@ import { pendingSouls, prestigeMultiplier } from './prestige';
 import { SaveData, createDefaultSave, loadLocal, sanitizeSave, saveLocal } from './saveSystem';
 import { computeSkillEffects, SkillEffects } from './skills';
 
+export interface TickEvents {
+  goldGained: number;
+  autoSpawned: number;
+}
+
 export class GameState {
   data: SaveData = createDefaultSave();
   effects: SkillEffects = computeSkillEffects({});
 
+  /** Версия сетки — инкрементится при изменении, UI следит и перерисовывает */
+  gridVersion = 0;
+
   private saveTimer: ReturnType<typeof setInterval> | null = null;
+  /** wall-clock последнего тика движка (не сериализуется) */
+  private lastTickMs = 0;
+  /** накопитель авто-спауна (секунды) */
+  private autoSpawnAcc = 0;
+
+  /**
+   * Глобальный wall-clock тик экономики.
+   * Вызывается EngineScene каждый кадр — работает независимо от того,
+   * какая игровая сцена активна/перекрыта. Это фундамент idle-игры:
+   * доход идёт всегда, даже когда открыт данж/навыки/другие оверлеи.
+   */
+  tick(now: number = Date.now()): TickEvents {
+    if (this.lastTickMs === 0) this.lastTickMs = now;
+    const dtSec = (now - this.lastTickMs) / 1000;
+    this.lastTickMs = now;
+    if (dtSec <= 0) return { goldGained: 0, autoSpawned: 0 };
+    // защита от скачков (devtools, throttle вкладки) — кап 5 минут за тик
+    const cappedDt = Math.min(dtSec, 300);
+
+    const goldGained = this.incomePerSec(now) * cappedDt;
+    this.addGold(goldGained);
+
+    // авто-спавн (навык "Магнетизм")
+    let autoSpawned = 0;
+    if (this.effects.autoSpawn) {
+      this.autoSpawnAcc += cappedDt;
+      while (this.autoSpawnAcc >= 12) {
+        const slot = this.data.grid.indexOf(null);
+        if (slot < 0) {
+          this.autoSpawnAcc = 0;
+          break;
+        }
+        this.autoSpawnAcc -= 12;
+        this.data.grid[slot] = { branch: randomBranch(), tier: 1 };
+        this.gridVersion++;
+        autoSpawned++;
+      }
+    } else {
+      this.autoSpawnAcc = 0;
+    }
+
+    return { goldGained, autoSpawned };
+  }
 
   /** Итоговый множитель дохода (навыки × престиж × ×2-реклама) */
   incomeMult(now = Date.now()): number {
@@ -96,6 +148,8 @@ export class GameState {
     fresh.bestWave = this.data.bestWave;
     this.data = fresh;
     this.refreshEffects();
+    this.gridVersion++;
+    this.lastTickMs = 0;
     return gained;
   }
 
@@ -103,7 +157,7 @@ export class GameState {
     saveLocal(this.data);
   }
 
-  /** Автосейв каждые N секунд + облако */
+  /** Автосейв каждые N секунд + облако (setInterval — независим от сцен) */
   startAutosave(onCloudSave: (save: SaveData) => void, intervalSec = 15): void {
     this.saveTimer = setInterval(() => {
       this.save();

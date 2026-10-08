@@ -25,7 +25,7 @@ export class ForgeScene extends Phaser.Scene {
   private hudCrystals!: Phaser.GameObjects.Text;
   private spawnBtnText!: Phaser.GameObjects.Text;
   private doubleText!: Phaser.GameObjects.Text;
-  private autoSpawnCooldown = 0;
+  private lastGridVersion = -1;
 
   constructor() {
     super('Forge');
@@ -42,8 +42,8 @@ export class ForgeScene extends Phaser.Scene {
     this.drawBottomBar();
     this.refreshHud();
 
-    // idle-тик дохода каждую секунду
-    this.time.addEvent({ delay: 1000, loop: true, callback: () => this.idleTick() });
+    // HUD обновляем ежесекундно; экономику начисляет EngineScene (не зависит от этой сцены)
+    this.time.addEvent({ delay: 1000, loop: true, callback: () => this.hudTick() });
   }
 
   private drawHeader(): void {
@@ -59,12 +59,10 @@ export class ForgeScene extends Phaser.Scene {
 
     this.makeButton(560, 100, '🏰 В ДАНЖ', () => {
       this.scene.launch('Dungeon');
-      this.scene.pause();
     }, 280, 70, 'btn', 24);
 
     this.makeButton(560, 185, '🔮 Навыки', () => {
       this.scene.launch('SkillTree');
-      this.scene.pause();
     }, 280, 70, 'btn', 24);
 
     this.makeButton(560, 290, '📺 Доход ×2 (5 мин)', () => {
@@ -116,15 +114,11 @@ export class ForgeScene extends Phaser.Scene {
       .setOrigin(0.5);
   }
 
-  private idleTick(): void {
-    this.state.addGold(this.state.incomePerSec());
-
-    if (this.state.effects.autoSpawn) {
-      this.autoSpawnCooldown += 1;
-      if (this.autoSpawnCooldown >= 12 && firstEmptySlot(this.state.data.grid) >= 0) {
-        this.autoSpawnCooldown = 0;
-        this.spawnWeapon(true);
-      }
+  /** Сцена больше не начисляет экономику (это делает EngineScene). Только обновление UI. */
+  private hudTick(): void {
+    if (this.state.gridVersion !== this.lastGridVersion) {
+      this.lastGridVersion = this.state.gridVersion;
+      this.renderAllWeapons();
     }
     this.refreshHud();
   }
@@ -147,6 +141,7 @@ export class ForgeScene extends Phaser.Scene {
     let tier = 1;
     if (Math.random() < this.state.effects.tier2SpawnChance) tier = 2;
     this.state.data.grid[slot] = { branch: randomBranch(), tier };
+    this.state.gridVersion++;
 
     if (Math.random() < this.state.effects.doubleSpawnChance) {
       const extra = firstEmptySlot(this.state.data.grid);
@@ -211,6 +206,7 @@ export class ForgeScene extends Phaser.Scene {
       if (a && !b) {
         this.state.data.grid[targetIndex] = a;
         this.state.data.grid[fromIndex] = null;
+        this.state.gridVersion++;
         this.renderAllWeapons();
         this.refreshHud();
         return;
@@ -221,6 +217,7 @@ export class ForgeScene extends Phaser.Scene {
         if (res) {
           this.state.data.grid[fromIndex] = null;
           this.state.data.grid[targetIndex] = res.result;
+          this.state.gridVersion++;
           this.renderAllWeapons();
           if (res.lucky) this.showToast('🍀 Удачное слияние! Тир +2!');
           this.refreshHud();

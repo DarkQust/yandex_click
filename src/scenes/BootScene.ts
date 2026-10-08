@@ -124,6 +124,7 @@ export class BootScene extends Phaser.Scene {
     window.addEventListener('beforeunload', () => state.save());
 
     this.registry.set('state', state);
+    this.scene.launch('Engine'); // глобальный idle-движок, всегда активен
     loading.destroy();
 
     if (offline > 0) {

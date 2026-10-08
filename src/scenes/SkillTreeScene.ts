@@ -21,7 +21,7 @@ export class SkillTreeScene extends Phaser.Scene {
   create(): void {
     this.state = this.registry.get('state') as GameState;
 
-    this.add.rectangle(360, 640, 720, 1280, 0x101018).setAlpha(0.97);
+    this.add.rectangle(360, 640, 720, 1280, 0x101018).setAlpha(0.97).setInteractive(); // блокирует ввод к Forge под оверлеем
     this.add
       .text(360, 50, '🔮 Дерево Навыков', { fontSize: '40px', color: '#c09aff' })
       .setOrigin(0.5);
@@ -45,8 +45,7 @@ export class SkillTreeScene extends Phaser.Scene {
       .setOrigin(0.5)
       .setInteractive({ useHandCursor: true });
     close.on('pointerdown', () => {
-      this.scene.stop();
-      this.scene.resume('Forge');
+      this.scene.stop(); // Forge не паузится — оверлей-модель
     });
 
     this.refreshCrystals();

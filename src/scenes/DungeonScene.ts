@@ -32,7 +32,7 @@ export class DungeonScene extends Phaser.Scene {
     this.state = this.registry.get('state') as GameState;
     this.running = true;
 
-    this.add.rectangle(360, 640, 720, 1280, 0x0c141c).setAlpha(0.97);
+    this.add.rectangle(360, 640, 720, 1280, 0x0c141c).setAlpha(0.97).setInteractive(); // блокирует ввод к Forge под оверлеем
     this.add
       .text(360, 60, '🏰 Подземелье Героев', { fontSize: '40px', color: '#9adcff' })
       .setOrigin(0.5);
@@ -146,7 +146,6 @@ export class DungeonScene extends Phaser.Scene {
   private exit(): void {
     this.running = false;
     this.state.save();
-    this.scene.stop();
-    this.scene.resume('Forge');
+    this.scene.stop(); // Forge не паузится — оверлей-модель
   }
 }

@@ -1,5 +1,6 @@
 import Phaser from 'phaser';
 import { BootScene } from './scenes/BootScene';
+import { EngineScene } from './scenes/EngineScene';
 import { ForgeScene } from './scenes/ForgeScene';
 import { DungeonScene } from './scenes/DungeonScene';
 import { SkillTreeScene } from './scenes/SkillTreeScene';
@@ -14,7 +15,7 @@ const config: Phaser.Types.Core.GameConfig = {
     mode: Phaser.Scale.FIT,
     autoCenter: Phaser.Scale.CENTER_BOTH,
   },
-  scene: [BootScene, ForgeScene, DungeonScene, SkillTreeScene],
+  scene: [BootScene, EngineScene, ForgeScene, DungeonScene, SkillTreeScene],
 };
 
 new Phaser.Game(config);
