@@ -51,6 +51,9 @@ export const DOUBLE_INCOME_SECONDS = 5 * 60;
 /** Interstitial каждые N убийств боссов */
 export const INTERSTITIAL_BOSS_INTERVAL = 3;
 
+/** Активный клик в данже: доля от суммарного ДПС */
+export const CLICK_DAMAGE_RATIO = 0.15;
+
 /** Шанс перепрыгнуть тир при слиянии (навык "Удача слияния") */
 export const LUCKY_MERGE_BASE_CHANCE = 0.05;
 

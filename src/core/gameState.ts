@@ -1,7 +1,7 @@
 /**
  * Центральное состояние игры — единственный источник правды для сцен.
  */
-import { DOUBLE_INCOME_SECONDS } from './config';
+import { CLICK_DAMAGE_RATIO, DOUBLE_INCOME_SECONDS } from './config';
 import {
   Weapon,
   offlineEarnings,
@@ -87,6 +87,11 @@ export class GameState {
 
   totalDps(): number {
     return totalDps(this.data.grid, this.dpsMult());
+  }
+
+  /** Урон активного клика в данже (минимум 1) */
+  clickDamage(): number {
+    return Math.max(1, this.totalDps() * CLICK_DAMAGE_RATIO);
   }
 
   spawnCostNow(): number {

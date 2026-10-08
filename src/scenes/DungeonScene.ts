@@ -10,19 +10,38 @@ import {
 import { GameState } from '../core/gameState';
 import { ya } from '../platform/yandex';
 
-const TICK_MS = 500; // бой тикает 2 раза в секунду
+const ATTACK_INTERVAL_MS = 700; // авто-атака героя
+const ENEMY_SPEED = 150; // px/с наезд врага
+const HERO_X = 150;
+const FIGHT_X = 330; // где враг встречается с героем
+const GROUND_Y = 830;
 
-/** Автобитва данжа: суммарный ДПС кузницы против монстров. */
+interface Enemy {
+  sprite: Phaser.GameObjects.Image;
+  hp: number;
+  maxHp: number;
+  wave: number;
+  engaged: boolean;
+}
+
+/**
+ * Данж-раннер: герой бежит на месте, параллакс-фон, враги наезжают справа.
+ * Активный клик по врагу = урон (15% ДПС). Авто-атака по таймеру.
+ */
 export class DungeonScene extends Phaser.Scene {
   private state!: GameState;
-  private mobHp = 0;
-  private mobMaxHp = 1;
-  private mobSprite!: Phaser.GameObjects.Image;
+  private bgFar!: Phaser.GameObjects.TileSprite;
+  private bgMid!: Phaser.GameObjects.TileSprite;
+  private bgGround!: Phaser.GameObjects.TileSprite;
+  private hero!: Phaser.GameObjects.Image;
+  private enemy: Enemy | null = null;
   private hpBar!: Phaser.GameObjects.Image;
   private waveText!: Phaser.GameObjects.Text;
   private logText!: Phaser.GameObjects.Text;
-  private running = false;
+  private statsText!: Phaser.GameObjects.Text;
   private log: string[] = [];
+  private running = false;
+  private heroFrame = 0;
 
   constructor() {
     super('Dungeon');
@@ -32,82 +51,157 @@ export class DungeonScene extends Phaser.Scene {
     this.state = this.registry.get('state') as GameState;
     this.running = true;
 
-    this.add.rectangle(360, 640, 720, 1280, 0x0c141c).setAlpha(0.97).setInteractive(); // блокирует ввод к Forge под оверлеем
+    // фон-подложка оверлея (блокирует ввод к Forge)
+    this.add.rectangle(360, 640, 720, 1280, 0x0c141c).setInteractive();
+
+    // параллакс
+    this.bgFar = this.add.tileSprite(360, 350, 720, 400, 'bg_far');
+    this.bgMid = this.add.tileSprite(360, 700, 720, 150, 'bg_mid');
+    this.bgGround = this.add.tileSprite(360, GROUND_Y + 30, 720, 60, 'bg_ground');
+
     this.add
       .text(360, 60, '🏰 Подземелье Героев', { fontSize: '40px', color: '#9adcff' })
       .setOrigin(0.5);
+    this.waveText = this.add.text(360, 120, '', { fontSize: '30px', color: '#ffffff' }).setOrigin(0.5);
 
-    this.waveText = this.add.text(360, 130, '', { fontSize: '30px', color: '#ffffff' }).setOrigin(0.5);
+    // герой
+    this.hero = this.add.image(HERO_X, GROUND_Y, 'hero_run_0');
 
-    // монстр
-    this.mobSprite = this.add.image(360, 500, 'monster');
-    // полоска HP
-    this.add.rectangle(360, 660, 420, 30, 0x333333);
-    this.hpBar = this.add.image(360 - 210 + 100, 660, 'bar').setTint(0xdd3333);
-    this.hpBar.setDisplaySize(420, 30);
+    // HP-бар врага
+    this.add.rectangle(500, 700, 400, 26, 0x333333);
+    this.hpBar = this.add.image(500, 700, 'bar').setTint(0xdd3333).setDisplaySize(400, 26);
 
-    this.add
-      .text(360, 760, '', { fontSize: '26px', color: '#ffb0a0' })
-      .setOrigin(0.5)
-      .setName('dpsText');
-
+    this.statsText = this.add
+      .text(360, 920, '', { fontSize: '24px', color: '#ffb0a0', align: 'center' })
+      .setOrigin(0.5);
     this.logText = this.add
-      .text(360, 960, '', { fontSize: '22px', color: '#c8d8e8', align: 'center' })
+      .text(360, 1010, '', { fontSize: '21px', color: '#c8d8e8', align: 'center' })
       .setOrigin(0.5);
 
-    // кнопка назад
+    this.add
+      .text(360, 1100, '👆 Кликайте по врагу — активные удары!', {
+        fontSize: '24px',
+        color: '#ffe66e',
+      })
+      .setOrigin(0.5);
+
     const back = this.add
-      .text(360, 1220, '← Вернуться в кузницу', { fontSize: '30px', color: '#ffe6a0' })
+      .text(360, 1210, '← Вернуться в кузницу', { fontSize: '30px', color: '#ffe6a0' })
       .setOrigin(0.5)
       .setInteractive({ useHandCursor: true });
-    back.on('pointerdown', () => this.exit());
+    back.on('pointerdown', () => {
+      this.running = false;
+      this.state.save();
+      this.scene.stop(); // оверлей-модель: Forge под нами не паузилась
+    });
 
     this.spawnWave();
-    this.time.addEvent({ delay: TICK_MS, loop: true, callback: () => this.combatTick() });
+
+    // обновление строки статов
+    this.time.addEvent({ delay: 500, loop: true, callback: () => this.updateStats() });
+    // авто-атака героя (ДПС)
+    this.time.addEvent({ delay: ATTACK_INTERVAL_MS, loop: true, callback: () => this.autoAttack() });
+    // кадры бега
+    this.time.addEvent({
+      delay: 160,
+      loop: true,
+      callback: () => {
+        this.heroFrame = 1 - this.heroFrame;
+        this.hero.setTexture(`hero_run_${this.heroFrame}`);
+      },
+    });
+  }
+
+  update(_time: number, delta: number): void {
+    if (!this.running) return;
+    const dt = delta / 1000;
+    const moving = this.enemy && !this.enemy.engaged;
+
+    // параллакс: фон движется пока герой бежит к врагу
+    const scroll = moving ? 1 : 0.25;
+    this.bgFar.tilePositionX += 20 * dt * scroll;
+    this.bgMid.tilePositionX += 60 * dt * scroll;
+    this.bgGround.tilePositionX += ENEMY_SPEED * dt * scroll;
+
+    if (this.enemy && !this.enemy.engaged) {
+      this.enemy.sprite.x -= ENEMY_SPEED * dt;
+      if (this.enemy.sprite.x <= FIGHT_X) {
+        this.enemy.sprite.x = FIGHT_X;
+        this.enemy.engaged = true;
+      }
+    }
   }
 
   private spawnWave(): void {
     const wave = this.state.data.wave;
-    this.mobMaxHp = monsterHp(wave);
-    this.mobHp = this.mobMaxHp;
+    const maxHp = monsterHp(wave);
     const boss = isBossWave(wave);
-    this.mobSprite.setTexture(boss ? 'boss' : 'monster');
-    this.mobSprite.setAlpha(1);
-    this.waveText.setText(
-      boss ? `☠ БОСС — волна ${wave}` : `Волна ${wave}`,
-    );
-    this.pushLog(boss ? '⚠ Появился босс!' : `Волна ${wave} началась`);
+    const texture = boss ? 'boss' : 'monster';
+    const sprite = this.add.image(760, GROUND_Y, texture).setInteractive({ useHandCursor: true });
+    if (boss) sprite.setDisplaySize(160, 160);
+    this.enemy = { sprite, hp: maxHp, maxHp, wave, engaged: false };
+
+    sprite.on('pointerdown', () => this.clickAttack());
+    this.waveText.setText(boss ? `☠ БОСС — волна ${wave}` : `Волна ${wave}`);
+    this.updateHpBar();
+    if (boss) this.pushLog('⚠ Впереди босс!');
   }
 
-  private combatTick(): void {
-    if (!this.running) return;
+  /** Активный клик по врагу */
+  private clickAttack(): void {
+    const e = this.enemy;
+    if (!e || !this.running) return;
+    const dmg = this.state.clickDamage();
+    this.dealDamage(dmg, '👆');
+    // кивок героя вперёд
+    this.tweens.add({ targets: this.hero, x: HERO_X + 18, yoyo: true, duration: 90 });
+    this.cameras.main.shake(60, 0.004);
+  }
 
-    let dmg = this.state.totalDps() * (TICK_MS / 1000);
-    // крит
+  /** Авто-атака ДПС */
+  private autoAttack(): void {
+    const e = this.enemy;
+    if (!this.running || !e || !e.engaged) return;
+    let dmg = this.state.totalDps() * (ATTACK_INTERVAL_MS / 1000);
+    let tag = '⚔';
     if (Math.random() < this.state.effects.critChance) {
       dmg *= 3;
-      this.pushLog('💥 Крит! ×3 урона');
+      tag = '💥 КРИТ';
     }
-    this.mobHp -= dmg;
+    this.dealDamage(dmg, tag);
+  }
 
-    const ratio = Math.max(0, this.mobHp / this.mobMaxHp);
-    this.hpBar.setDisplaySize(420 * ratio, 30);
-    this.hpBar.x = 360 - 210 + (420 * ratio) / 2;
-    this.mobSprite.x = 360 + Phaser.Math.Between(-3, 3); // дрожание от ударов
+  private dealDamage(dmg: number, tag: string): void {
+    const e = this.enemy;
+    if (!e) return;
+    e.hp -= dmg;
+    this.damageNumber(e.sprite.x, e.sprite.y - 60, dmg, tag);
+    e.sprite.x += Phaser.Math.Between(-3, 3);
+    this.updateHpBar();
+    if (e.hp <= 0) this.onKill();
+  }
 
-    const dpsText = this.children.getByName('dpsText') as Phaser.GameObjects.Text;
-    dpsText?.setText(`Ваш ДПС: ${formatNumber(this.state.totalDps())}   HP: ${formatNumber(Math.max(0, this.mobHp))}`);
+  private updateHpBar(): void {
+    const e = this.enemy;
+    const ratio = e ? Math.max(0, e.hp / e.maxHp) : 0;
+    this.hpBar.setDisplaySize(400 * ratio, 26);
+  }
 
-    if (this.mobHp <= 0) {
-      this.onKill();
-    } else if (this.state.totalDps() <= 0) {
-      this.pushLog('Нет урона! Скуйте оружие в кузнице.');
-      this.mobHp = this.mobMaxHp; // монстр восстанавливается
-    }
+  private damageNumber(x: number, y: number, dmg: number, tag: string): void {
+    const t = this.add
+      .text(x, y, `${tag} ${formatNumber(dmg)}`, {
+        fontSize: '24px',
+        color: tag.includes('💥') ? '#ff6e4a' : '#ffd24a',
+        stroke: '#000',
+        strokeThickness: 3,
+      })
+      .setOrigin(0.5);
+    this.tweens.add({ targets: t, y: y - 70, alpha: 0, duration: 700, onComplete: () => t.destroy() });
   }
 
   private onKill(): void {
-    const wave = this.state.data.wave;
+    const e = this.enemy!;
+    const wave = e.wave;
     const gold = Math.floor(monsterGoldReward(wave) * this.state.effects.dungeonGoldMult);
     this.state.addGold(gold);
     let msg = `+${formatNumber(gold)} 🪙`;
@@ -117,35 +211,37 @@ export class DungeonScene extends Phaser.Scene {
       this.state.data.crystals += crystals;
       this.state.data.bossesKilled += 1;
       msg += `, +${crystals} 💎`;
-      if (this.state.data.bossesKilled % INTERSTITIAL_BOSS_INTERVAL === 0) {
-        void ya.showInterstitial();
-      }
+      if (this.state.data.bossesKilled % INTERSTITIAL_BOSS_INTERVAL === 0) void ya.showInterstitial();
       void ya.submitLeaderboard(this.state.data.lifetimeGold);
     }
-
-    this.pushLog(`Волна ${wave} зачищена: ${msg}`);
+    this.pushLog(`Волна ${wave}: ${msg}`);
     this.state.data.wave += 1;
     this.state.data.bestWave = Math.max(this.state.data.bestWave, wave);
     this.state.save();
 
-    // небольшая пауза между волнами
-    this.running = false;
-    this.mobSprite.setAlpha(0.3);
-    this.time.delayedCall(800, () => {
-      this.spawnWave();
-      this.running = true;
+    // враг убит — герой пробегает вперёд, спавним следующую волну
+    this.enemy = null;
+    this.tweens.add({
+      targets: e.sprite,
+      x: 800,
+      alpha: 0,
+      duration: 400,
+      onComplete: () => e.sprite.destroy(),
+    });
+    this.time.delayedCall(700, () => {
+      if (this.running) this.spawnWave();
     });
   }
 
   private pushLog(text: string): void {
     this.log.push(text);
-    if (this.log.length > 4) this.log.shift();
+    if (this.log.length > 3) this.log.shift();
     this.logText.setText(this.log.join('\n'));
   }
 
-  private exit(): void {
-    this.running = false;
-    this.state.save();
-    this.scene.stop(); // Forge не паузится — оверлей-модель
+  updateStats(): void {
+    this.statsText.setText(
+      `ДПС: ${formatNumber(this.state.totalDps())}  |  Клик: ${formatNumber(this.state.clickDamage())}  |  Рекорд волн: ${this.state.data.bestWave}`,
+    );
   }
 }

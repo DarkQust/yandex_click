@@ -106,6 +106,44 @@ export class BootScene extends Phaser.Scene {
     g.fillCircle(62, 70, 6);
     g.fillCircle(118, 70, 6);
     g.generateTexture('boss', 180, 180);
+
+    // --- Placeholder-визуал раннера (до этапа B: ассеты image-gen/pixellab) ---
+    // Герой: 2 кадра бега (силуэт воина с мечом)
+    for (let f = 0; f < 2; f++) {
+      g.clear();
+      const legOff = f === 0 ? 8 : -8;
+      g.fillStyle(0x9a8a6a, 1);
+      g.fillRect(52, 20, 16, 16); // голова
+      g.fillStyle(0x6a5a4a, 1);
+      g.fillRect(46, 36, 28, 26); // торс
+      g.fillRect(46 + legOff, 62, 10, 18); // нога 1
+      g.fillRect(64 - legOff, 62, 10, 18); // нога 2
+      g.fillStyle(0xd8b24a, 1);
+      g.fillRect(72, f === 0 ? 30 : 40, 26, 6); // меч
+      g.generateTexture(`hero_run_${f}`, 120, 90);
+    }
+    // Параллакс-фоны (3 слоя, бесшовные по X)
+    g.clear();
+    g.fillStyle(0x0a1018, 1);
+    g.fillRect(0, 0, 720, 400);
+    g.fillStyle(0x1a2436, 1);
+    for (let i = 0; i < 6; i++) g.fillTriangle(i * 120, 400, i * 120 + 70, 120, i * 120 + 140, 400); // горы
+    g.generateTexture('bg_far', 720, 400);
+    g.clear();
+    g.fillStyle(0x141c28, 0);
+    g.fillStyle(0x222016, 1);
+    for (let i = 0; i < 9; i++) {
+      g.fillRect(i * 90 + 10, 60, 26, 90); // колонны
+      g.fillRect(i * 90 + 4, 48, 38, 14);
+    }
+    g.generateTexture('bg_mid', 720, 150);
+    g.clear();
+    g.fillStyle(0x2a2018, 1);
+    g.fillRect(0, 0, 720, 60);
+    g.fillStyle(0x3a2c20, 1);
+    for (let i = 0; i < 18; i++) g.fillRect(i * 40, 8 + (i % 3) * 14, 30, 10); // камни
+    g.generateTexture('bg_ground', 720, 60);
+
     g.destroy();
   }
 

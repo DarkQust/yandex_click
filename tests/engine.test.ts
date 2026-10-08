@@ -49,6 +49,14 @@ describe('engine tick', () => {
     expect(v).toBeGreaterThanOrEqual(2);
   });
 
+  it('clickDamage scales with dps and is >= 1', () => {
+    const empty = new GameState();
+    expect(empty.clickDamage()).toBe(1);
+    const s = new GameState();
+    s.data.grid = [{ branch: 'sword', tier: 5 }];
+    expect(s.clickDamage()).toBeCloseTo(s.totalDps() * 0.15, 5);
+  });
+
   it('auto-spawn stops when grid full', () => {
     const s = new GameState();
     s.data.skills = { luck3: 1 };
