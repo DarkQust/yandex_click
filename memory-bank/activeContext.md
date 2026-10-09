@@ -23,4 +23,4 @@
 - `npm run test`, `npm run build`
 
 ## Следующие шаги (итерация 2)
-A4 — Разломы: data-driven ExpeditionScene + 4 разлома + ArtifactScene UI (ждёт команды)
+A3-fix pass завершён (52/52 тестов). Далее A4 — Разломы: ExpeditionScene + ArtifactScene UI (ждёт команды)
