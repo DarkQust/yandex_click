@@ -13,6 +13,18 @@ import {
 import { pendingSouls, prestigeMultiplier } from './prestige';
 import { SaveData, createDefaultSave, loadLocal, sanitizeSave, saveLocal } from './saveSystem';
 import { computeSkillEffects, SkillEffects } from './skills';
+import {
+  Artifact,
+  CRAFT_COST_SHARDS,
+  MAX_EQUIPPED,
+  MAX_INVENTORY,
+  RARITY_INFO,
+  REROLL_COST_STABILIZERS,
+  StatId,
+  artifactTotals,
+  craftArtifact,
+  rerollArtifact,
+} from './artifacts';
 
 export interface TickEvents {
   goldGained: number;
@@ -71,14 +83,52 @@ export class GameState {
     return { goldGained, autoSpawned };
   }
 
-  /** Итоговый множитель дохода (навыки × престиж × ×2-реклама) */
+  /** Экипированные артефакты */
+  equippedArtifacts(): Artifact[] {
+    const ids = new Set(this.data.equippedIds);
+    return this.data.artifacts.filter((a) => ids.has(a.id));
+  }
+
+  /** Суммарные статы экипированных артефактов (в процентах) */
+  artifactTotals(): Record<StatId, number> {
+    return artifactTotals(this.equippedArtifacts());
+  }
+
+  /** Итоговый множитель дохода (навыки × престиж × артефакты × ×2-реклама) */
   incomeMult(now = Date.now()): number {
     const doubleActive = this.data.doubleIncomeUntil > now ? 2 : 1;
-    return this.effects.incomeMult * prestigeMultiplier(this.data.souls) * doubleActive;
+    const art = 1 + (this.artifactTotals().income ?? 0) / 100;
+    return this.effects.incomeMult * prestigeMultiplier(this.data.souls) * art * doubleActive;
   }
 
   dpsMult(): number {
-    return this.effects.dpsMult * prestigeMultiplier(this.data.souls);
+    const art = 1 + (this.artifactTotals().dps ?? 0) / 100;
+    return this.effects.dpsMult * prestigeMultiplier(this.data.souls) * art;
+  }
+
+  totalCritChance(): number {
+    return this.effects.critChance + (this.artifactTotals().critChance ?? 0) / 100;
+  }
+
+  totalCritMult(): number {
+    return 3 * (1 + (this.artifactTotals().critMult ?? 0) / 100);
+  }
+
+  totalLuckyMergeChance(): number {
+    return this.effects.luckyMergeChance + (this.artifactTotals().luckyMerge ?? 0) / 100;
+  }
+
+  totalDungeonGoldMult(): number {
+    return this.effects.dungeonGoldMult * (1 + (this.artifactTotals().dungeonGold ?? 0) / 100);
+  }
+
+  totalCrystalMult(): number {
+    return this.effects.crystalMult * (1 + (this.artifactTotals().crystal ?? 0) / 100);
+  }
+
+  /** Бонус к шансу secret-аффикса (пока 0; бустится разломом Хаоса) */
+  shardBonusMult(): number {
+    return 1 + (this.artifactTotals().shardBonus ?? 0) / 100;
   }
 
   incomePerSec(now = Date.now()): number {
@@ -89,13 +139,16 @@ export class GameState {
     return totalDps(this.data.grid, this.dpsMult());
   }
 
-  /** Урон активного клика в данже (минимум 1) */
+  /** Урон активного клика в данже (минимум 1, артефакты усиливают) */
   clickDamage(): number {
-    return Math.max(1, this.totalDps() * CLICK_DAMAGE_RATIO);
+    const art = 1 + (this.artifactTotals().click ?? 0) / 100;
+    return Math.max(1, this.totalDps() * CLICK_DAMAGE_RATIO * art);
   }
 
   spawnCostNow(): number {
-    return Math.floor(spawnCost(this.data.spawnCount) * (1 - this.effects.spawnDiscount));
+    const artDisc = (this.artifactTotals().spawnDiscount ?? 0) / 100;
+    const totalDisc = Math.min(0.6, this.effects.spawnDiscount + artDisc);
+    return Math.floor(spawnCost(this.data.spawnCount) * (1 - totalDisc));
   }
 
   /** Начисление золота с учётом lifetime-статистики */
@@ -134,7 +187,8 @@ export class GameState {
     const now = Date.now();
     const secondsAway = Math.floor((now - this.data.lastSeen) / 1000);
     if (secondsAway < 60) return 0; // меньше минуты — не считаем
-    const rate = this.effects.offlineFullRate ? 1 : 0.5;
+    const tot = this.artifactTotals();
+    const rate = (this.effects.offlineFullRate ? 1 : 0.5) * (1 + (tot.offlineRate ?? 0) / 100);
     // offlineEarnings уже имеет ×0.5 — при полном навыке удваиваем
     const base = offlineEarnings(totalIncomePerSec(this.data.grid, this.incomeMult(now)), secondsAway);
     const earned = rate === 1 ? base * 2 : base;
@@ -151,6 +205,11 @@ export class GameState {
     fresh.souls = keepSouls;
     fresh.skills = { ...this.data.skills }; // навыки сохраняем — мягкий престиж
     fresh.bestWave = this.data.bestWave;
+    // артефакты и их ресурсы переживают престиж (по дизайну Iteration 2)
+    fresh.artifacts = this.data.artifacts;
+    fresh.equippedIds = this.data.equippedIds;
+    fresh.shards = this.data.shards;
+    fresh.stabilizers = this.data.stabilizers;
     this.data = fresh;
     this.refreshEffects();
     this.gridVersion++;
@@ -191,5 +250,51 @@ export class GameState {
 
   getWeapon(index: number): Weapon | null {
     return this.data.grid[index];
+  }
+
+  // ---------- Артефакты: действия ----------
+
+  /** Ковка артефакта за Осколки. Возвращает артефакт или null. */
+  craftArtifact(rng: () => number = Math.random, rarityBonus = 0, secretBonus = 0): Artifact | null {
+    if (this.data.shards < CRAFT_COST_SHARDS) return null;
+    if (this.data.artifacts.length >= MAX_INVENTORY) return null;
+    this.data.shards -= CRAFT_COST_SHARDS;
+    const art = craftArtifact(rng, rarityBonus, secretBonus);
+    this.data.artifacts.push(art);
+    return art;
+  }
+
+  /** Рерoll одного аффикса за Стабилизатор */
+  rerollArtifact(id: string, rng: () => number = Math.random): Artifact | null {
+    if (this.data.stabilizers < REROLL_COST_STABILIZERS) return null;
+    const i = this.data.artifacts.findIndex((a) => a.id === id);
+    if (i < 0) return null;
+    this.data.stabilizers -= REROLL_COST_STABILIZERS;
+    this.data.artifacts[i] = rerollArtifact(this.data.artifacts[i], rng);
+    return this.data.artifacts[i];
+  }
+
+  /** Распыл в Осколки по редкости */
+  salvageArtifact(id: string): number {
+    const i = this.data.artifacts.findIndex((a) => a.id === id);
+    if (i < 0) return 0;
+    const art = this.data.artifacts[i];
+    this.data.artifacts.splice(i, 1);
+    this.unequipArtifact(id);
+    const gained = RARITY_INFO[art.rarity].salvageShards;
+    this.data.shards += gained;
+    return gained;
+  }
+
+  equipArtifact(id: string): boolean {
+    if (this.data.equippedIds.length >= MAX_EQUIPPED) return false;
+    if (!this.data.artifacts.some((a) => a.id === id)) return false;
+    if (this.data.equippedIds.includes(id)) return false;
+    this.data.equippedIds.push(id);
+    return true;
+  }
+
+  unequipArtifact(id: string): void {
+    this.data.equippedIds = this.data.equippedIds.filter((x) => x !== id);
   }
 }

@@ -164,8 +164,8 @@ export class DungeonScene extends Phaser.Scene {
     if (!this.running || !e || !e.engaged) return;
     let dmg = this.state.totalDps() * (ATTACK_INTERVAL_MS / 1000);
     let tag = '⚔';
-    if (Math.random() < this.state.effects.critChance) {
-      dmg *= 3;
+    if (Math.random() < this.state.totalCritChance()) {
+      dmg *= this.state.totalCritMult();
       tag = '💥 КРИТ';
     }
     this.dealDamage(dmg, tag);
@@ -202,12 +202,12 @@ export class DungeonScene extends Phaser.Scene {
   private onKill(): void {
     const e = this.enemy!;
     const wave = e.wave;
-    const gold = Math.floor(monsterGoldReward(wave) * this.state.effects.dungeonGoldMult);
+    const gold = Math.floor(monsterGoldReward(wave) * this.state.totalDungeonGoldMult());
     this.state.addGold(gold);
     let msg = `+${formatNumber(gold)} 🪙`;
 
     if (isBossWave(wave)) {
-      const crystals = bossCrystalReward(wave) * this.state.effects.crystalMult;
+      const crystals = bossCrystalReward(wave) * this.state.totalCrystalMult();
       this.state.data.crystals += crystals;
       this.state.data.bossesKilled += 1;
       msg += `, +${crystals} 💎`;

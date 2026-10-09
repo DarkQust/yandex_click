@@ -3,6 +3,7 @@
  */
 import { GRID_SIZE } from './config';
 import { Weapon } from './economy';
+import { Artifact } from './artifacts';
 
 export interface SaveData {
   version: number;
@@ -17,10 +18,15 @@ export interface SaveData {
   bossesKilled: number;
   skills: Record<string, number>;
   doubleIncomeUntil: number; // timestamp окончания ×2
+  // --- v2: система артефактов ---
+  shards: number; // Осколки Разлома — крафт
+  stabilizers: number; // Стабилизаторы — рерoll аффиксов
+  artifacts: Artifact[]; // инвентарь
+  equippedIds: string[]; // экипированные (макс MAX_EQUIPPED)
   lastSeen: number;
 }
 
-export const SAVE_VERSION = 1;
+export const SAVE_VERSION = 2;
 const LOCAL_KEY = 'forge_of_heroes_save_v1';
 
 export function createDefaultSave(): SaveData {
@@ -37,6 +43,10 @@ export function createDefaultSave(): SaveData {
     bossesKilled: 0,
     skills: {},
     doubleIncomeUntil: 0,
+    shards: 30, // стартовый бонус для знакомства с крафтом
+    stabilizers: 2,
+    artifacts: [],
+    equippedIds: [],
     lastSeen: Date.now(),
   };
 }
@@ -55,6 +65,10 @@ export function sanitizeSave(raw: unknown): SaveData {
     crystals: Number.isFinite(r.crystals) ? (r.crystals as number) : 0,
     souls: Number.isFinite(r.souls) ? (r.souls as number) : 0,
     skills: r.skills && typeof r.skills === 'object' ? r.skills : {},
+    shards: Number.isFinite(r.shards) ? (r.shards as number) : 30,
+    stabilizers: Number.isFinite(r.stabilizers) ? (r.stabilizers as number) : 2,
+    artifacts: Array.isArray(r.artifacts) ? (r.artifacts as Artifact[]) : [],
+    equippedIds: Array.isArray(r.equippedIds) ? (r.equippedIds as string[]) : [],
     grid,
     version: SAVE_VERSION,
   };

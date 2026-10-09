@@ -212,7 +212,7 @@ export class ForgeScene extends Phaser.Scene {
         return;
       }
       if (a && b && canMerge(a, b)) {
-        const luckyChance = LUCKY_MERGE_BASE_CHANCE + this.state.effects.luckyMergeChance;
+        const luckyChance = LUCKY_MERGE_BASE_CHANCE + this.state.totalLuckyMergeChance();
         const res = merge(a, b, luckyChance);
         if (res) {
           this.state.data.grid[fromIndex] = null;
