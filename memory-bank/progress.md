@@ -35,7 +35,13 @@
   - авто-атака ДПС каждые 700мс, крит ×3 по навыку
   - награды/волны/боссы сохранены; engine idle работает пока открыт данж
   - placeholder-текстуры в Boot (hero_run_0/1, bg_far/mid/ground)
-- [ ] A3 Ядро артефактов (редкости/аффиксы/reroll/secret affix)
+- [x] A3 Ядро артефактов (редкости/аффиксы/reroll/secret affix)
+  - src/core/artifacts.ts: 5 редкостей (Кованый..Легендарный), 14 аффиксов (10 обычных + 4 secret), крафт за Осколки (25), рерoll за Стабилизатор (1), распыл по редкости
+  - SaveData v2 (миграция мягкая: v1 получает дефолты, стартовые 30 осколков + 2 стабилизатора)
+  - GameState: craftArtifact/rerollArtifact/salvageArtifact/equip/unequip (макс 5 экип, 30 инвентарь)
+  - Артефакты мультипликативно усиливают income/dps/click + totalCritChance/totalCritMult/totalLuckyMerge/totalDungeonGold/totalCrystal
+  - Престиж сохраняет артефакты/осколки/стабилизаторы
+  - 13 новых тестов (итого 37/37)
 - [ ] A4 Разломы (data-driven ExpeditionScene + 4 разлома)
 - [ ] A5 Охота + питомцы (кейсы/ключи/корм)
 - [ ] A6 Адаптация престижа/навыков, ранний прогресс
