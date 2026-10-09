@@ -3,7 +3,7 @@
  */
 import { GRID_SIZE } from './config';
 import { Weapon } from './economy';
-import { Artifact } from './artifacts';
+import { Artifact, AFFIX_POOL, MAX_EQUIPPED, RARITIES } from './artifacts';
 
 export interface SaveData {
   version: number;
@@ -51,6 +51,37 @@ export function createDefaultSave(): SaveData {
   };
 }
 
+const VALID_STATS = new Set(AFFIX_POOL.map((a) => a.stat));
+
+/** Минимальная структурная валидация артефактов из сейва */
+function sanitizeArtifacts(raw: unknown): Artifact[] {
+  if (!Array.isArray(raw)) return [];
+  const out: Artifact[] = [];
+  for (const item of raw) {
+    if (!item || typeof item !== 'object') continue;
+    const a = item as Partial<Artifact>;
+    if (typeof a.id !== 'string' || a.id.length === 0) continue;
+    if (typeof a.rarity !== 'string' || !RARITIES.includes(a.rarity)) continue;
+    if (!Array.isArray(a.affixes)) continue;
+    const affixes = a.affixes.filter(
+      (af): af is Artifact['affixes'][number] =>
+        !!af &&
+        typeof af === 'object' &&
+        VALID_STATS.has((af as { stat?: string }).stat as never) &&
+        Number.isFinite((af as { value?: number }).value) &&
+        typeof (af as { secret?: boolean }).secret === 'boolean',
+    );
+    out.push({
+      id: a.id,
+      name: typeof a.name === 'string' ? a.name : '',
+      rarity: a.rarity,
+      affixes,
+      createdAt: Number.isFinite(a.createdAt) ? (a.createdAt as number) : Date.now(),
+    });
+  }
+  return out;
+}
+
 /** Валидация и миграция загруженных данных */
 export function sanitizeSave(raw: unknown): SaveData {
   const def = createDefaultSave();
@@ -58,7 +89,7 @@ export function sanitizeSave(raw: unknown): SaveData {
   const r = raw as Partial<SaveData>;
   const grid = Array.isArray(r.grid) ? r.grid.slice(0, GRID_SIZE) : def.grid;
   while (grid.length < GRID_SIZE) grid.push(null);
-  return {
+  const out: SaveData = {
     ...def,
     ...r,
     gold: Number.isFinite(r.gold) ? (r.gold as number) : def.gold,
@@ -67,11 +98,18 @@ export function sanitizeSave(raw: unknown): SaveData {
     skills: r.skills && typeof r.skills === 'object' ? r.skills : {},
     shards: Number.isFinite(r.shards) ? (r.shards as number) : 30,
     stabilizers: Number.isFinite(r.stabilizers) ? (r.stabilizers as number) : 2,
-    artifacts: Array.isArray(r.artifacts) ? (r.artifacts as Artifact[]) : [],
-    equippedIds: Array.isArray(r.equippedIds) ? (r.equippedIds as string[]) : [],
+    artifacts: sanitizeArtifacts(r.artifacts),
     grid,
     version: SAVE_VERSION,
   };
+  // очистка equippedIds: дубли, не-строки, ID отсутствующих артефактов, лимит слотов
+  const inventoryIds = new Set(out.artifacts.map((a) => a.id));
+  out.equippedIds = (Array.isArray(r.equippedIds) ? r.equippedIds : [])
+    .filter((id): id is string => typeof id === 'string')
+    .filter((id, i, arr) => arr.indexOf(id) === i) // без дублей
+    .filter((id) => inventoryIds.has(id))
+    .slice(0, MAX_EQUIPPED);
+  return out;
 }
 
 export function saveLocal(data: SaveData): void {

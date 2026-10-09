@@ -64,10 +64,10 @@ export const AFFIX_POOL: AffixDef[] = [
   { stat: 'luckyMerge', ru: '+% удача слияния', weight: 6, min: 2, max: 6, secret: false },
   { stat: 'dungeonGold', ru: '+% золото данжа', weight: 10, min: 8, max: 20, secret: false },
   { stat: 'crystal', ru: '+% кристаллы боссов', weight: 6, min: 5, max: 15, secret: false },
-  { stat: 'petEfficiency', ru: '+% эффективность питомцев', weight: 0, min: 8, max: 14, secret: true },
-  { stat: 'shardBonus', ru: '+% осколки разломов', weight: 0, min: 10, max: 25, secret: true },
-  { stat: 'keyChance', ru: '+% шанс ключа на охоте', weight: 0, min: 15, max: 30, secret: true },
-  { stat: 'offlineCap', ru: '+ч к лимиту оффлайна', weight: 0, min: 1, max: 3, secret: true },
+  { stat: 'petEfficiency', ru: '+% эффективность питомцев', weight: 25, min: 8, max: 14, secret: true },
+  { stat: 'shardBonus', ru: '+% осколки разломов', weight: 25, min: 10, max: 25, secret: true },
+  { stat: 'keyChance', ru: '+% шанс ключа на охоте', weight: 25, min: 15, max: 30, secret: true },
+  { stat: 'offlineCap', ru: '+ч к лимиту оффлайна', weight: 25, min: 1, max: 3, secret: true },
 ];
 
 export interface Affix {
@@ -87,7 +87,13 @@ export interface Artifact {
 // ---------- Экономика артефактов ----------
 export const CRAFT_COST_SHARDS = 25;
 export const REROLL_COST_STABILIZERS = 1;
-export const BASE_SECRET_CHANCE = 0.02;
+export const BASE_SECRET_CHANCE = 0.005; // 0.5%
+export const MAX_SECRET_CHANCE = 0.02; // 2% — жёсткий кап
+/**
+ * Правило Разлома Хаоса (и любых других источников): бонус к secret-шансу
+ * складывается с базовым, но итог никогда не превышает MAX_SECRET_CHANCE.
+ * Т.е. Хаос поднимает шанс максимум с 0.5% до 2%.
+ */
 export const MAX_EQUIPPED = 5;
 export const MAX_INVENTORY = 30;
 
@@ -116,12 +122,14 @@ function pickWeighted<T extends { weight: number }>(pool: T[], rng: () => number
 
 /** Ролл редкости; rarityBonus 0..1 сдвигает шансы в сторону редких */
 export function rollRarity(rng: () => number, rarityBonus = 0): Rarity {
+  // защита границ: бонус строго 0..1
+  const bonus = Math.min(1, Math.max(0, rarityBonus));
   const w = { ...RARITY_WEIGHTS };
-  if (rarityBonus > 0) {
-    w.common = 50 * (1 - rarityBonus);
-    w.rare = 14 * (1 + rarityBonus);
-    w.epic = 6 * (1 + rarityBonus * 2);
-    w.legendary = 2 * (1 + rarityBonus * 3);
+  if (bonus > 0) {
+    w.common = 50 * (1 - bonus);
+    w.rare = 14 * (1 + bonus);
+    w.epic = 6 * (1 + bonus * 2);
+    w.legendary = 2 * (1 + bonus * 3);
   }
   const total = Object.values(w).reduce((a, b) => a + b, 0);
   let roll = rng() * total;
@@ -156,7 +164,8 @@ export function craftArtifact(rng: () => number, rarityBonus = 0, secretBonus = 
     affixes.push(rollAffix(rng, info.valueMult, taken, regular));
   }
   // отдельный ролл secret-аффикса (добавляется сверх обычных)
-  if (rng() < BASE_SECRET_CHANCE + secretBonus) {
+  const secretChance = Math.min(MAX_SECRET_CHANCE, BASE_SECRET_CHANCE + Math.max(0, secretBonus));
+  if (rng() < secretChance) {
     const secretPool = AFFIX_POOL.filter((a) => a.secret);
     affixes.push(rollAffix(rng, info.valueMult, taken, secretPool));
   }

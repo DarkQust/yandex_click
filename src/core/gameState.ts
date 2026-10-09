@@ -1,10 +1,9 @@
 /**
  * Центральное состояние игры — единственный источник правды для сцен.
  */
-import { CLICK_DAMAGE_RATIO, DOUBLE_INCOME_SECONDS } from './config';
+import { CLICK_DAMAGE_RATIO, CRIT_BASE_MULT, CRIT_CHANCE_CAP, DOUBLE_INCOME_SECONDS, LUCKY_MERGE_CAP, OFFLINE_CAP_SECONDS } from './config';
 import {
   Weapon,
-  offlineEarnings,
   randomBranch,
   spawnCost,
   totalDps,
@@ -107,15 +106,17 @@ export class GameState {
   }
 
   totalCritChance(): number {
-    return this.effects.critChance + (this.artifactTotals().critChance ?? 0) / 100;
+    const raw = this.effects.critChance + (this.artifactTotals().critChance ?? 0) / 100;
+    return Math.min(CRIT_CHANCE_CAP, Math.max(0, raw));
   }
 
   totalCritMult(): number {
-    return 3 * (1 + (this.artifactTotals().critMult ?? 0) / 100);
+    return CRIT_BASE_MULT * (1 + (this.artifactTotals().critMult ?? 0) / 100);
   }
 
   totalLuckyMergeChance(): number {
-    return this.effects.luckyMergeChance + (this.artifactTotals().luckyMerge ?? 0) / 100;
+    const raw = this.effects.luckyMergeChance + (this.artifactTotals().luckyMerge ?? 0) / 100;
+    return Math.min(LUCKY_MERGE_CAP, Math.max(0, raw));
   }
 
   totalDungeonGoldMult(): number {
@@ -182,16 +183,25 @@ export class GameState {
     return Math.max(0, Math.floor((this.data.doubleIncomeUntil - now) / 1000));
   }
 
-  /** Оффлайн-доход при старте */
-  applyOfflineEarnings(): number {
-    const now = Date.now();
+  /** Эффективность оффлайн-дохода: навык (50%/100%) и аффикс offlineRate независимы */
+  offlineEfficiency(): number {
+    const tot = this.artifactTotals();
+    const base = this.effects.offlineFullRate ? 1 : 0.5;
+    return base * (1 + (tot.offlineRate ?? 0) / 100);
+  }
+
+  /** Кап оффлайн-дохода в секундах: базовый 8ч + аффикс offlineCap (часы) */
+  offlineCapSeconds(): number {
+    return OFFLINE_CAP_SECONDS + (this.artifactTotals().offlineCap ?? 0) * 3600;
+  }
+
+  /** Оффлайн-доход при старте (now инжектируем для тестов) */
+  applyOfflineEarnings(now: number = Date.now()): number {
     const secondsAway = Math.floor((now - this.data.lastSeen) / 1000);
     if (secondsAway < 60) return 0; // меньше минуты — не считаем
-    const tot = this.artifactTotals();
-    const rate = (this.effects.offlineFullRate ? 1 : 0.5) * (1 + (tot.offlineRate ?? 0) / 100);
-    // offlineEarnings уже имеет ×0.5 — при полном навыке удваиваем
-    const base = offlineEarnings(totalIncomePerSec(this.data.grid, this.incomeMult(now)), secondsAway);
-    const earned = rate === 1 ? base * 2 : base;
+    const capped = Math.min(secondsAway, this.offlineCapSeconds());
+    const income = totalIncomePerSec(this.data.grid, this.incomeMult(now));
+    const earned = Math.floor(income * capped * this.offlineEfficiency());
     if (earned > 0) this.addGold(earned);
     return earned;
   }

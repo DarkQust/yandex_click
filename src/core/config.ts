@@ -57,6 +57,11 @@ export const CLICK_DAMAGE_RATIO = 0.15;
 /** Шанс перепрыгнуть тир при слиянии (навык "Удача слияния") */
 export const LUCKY_MERGE_BASE_CHANCE = 0.05;
 
+/** Капы вероятностей (защита от выхода за границы при стеке навыков+артефактов) */
+export const CRIT_CHANCE_CAP = 0.75;
+export const LUCKY_MERGE_CAP = 0.5;
+export const CRIT_BASE_MULT = 3;
+
 export const TIER_NAMES = [
   'Ржавый',
   'Бронзовый',
