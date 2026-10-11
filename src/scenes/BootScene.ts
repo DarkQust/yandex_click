@@ -155,7 +155,9 @@ export class BootScene extends Phaser.Scene {
     await ya.init();
     const cloud = await ya.cloudLoad();
     const state = GameState.load(cloud);
-    const offline = state.applyOfflineEarnings();
+    const now = Date.now();
+    const offline = state.applyOfflineEarnings(now);
+    const offlineRifts = state.applyOfflineRifts(now);
     state.startAutosave((save) => ya.cloudSave(save));
 
     // сейв при закрытии вкладки
@@ -165,10 +167,13 @@ export class BootScene extends Phaser.Scene {
     this.scene.launch('Engine'); // глобальный idle-движок, всегда активен
     loading.destroy();
 
-    if (offline > 0) {
+    if (offline > 0 || offlineRifts.length > 0) {
+      const riftLines = offlineRifts
+        .map((r) => `${r.rift}: 💠${r.grant.shards} 🔩${r.grant.stabilizers} 📦${r.grant.artifacts} 🪙${formatNumber(r.grant.gold)}`)
+        .join('\n');
       this.add
-        .text(360, 500, `Пока вас не было, кузница наковала:\n🪙 ${formatNumber(offline)} золота!`, {
-          fontSize: '30px',
+        .text(360, 460, `Пока вас не было:\n🪙 ${formatNumber(offline)} золота${riftLines ? '\n' + riftLines : ''}`, {
+          fontSize: '28px',
           color: '#ffe6a0',
           align: 'center',
         })

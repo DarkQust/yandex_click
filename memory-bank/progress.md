@@ -42,7 +42,15 @@
   - Артефакты мультипликативно усиливают income/dps/click + totalCritChance/totalCritMult/totalLuckyMerge/totalDungeonGold/totalCrystal
   - Престиж сохраняет артефакты/осколки/стабилизаторы
   - 13 новых тестов (итого 37/37)
-- [ ] A4 Разломы (data-driven ExpeditionScene + 4 разлома)
+- [x] A4 Разломы (data-driven ExpeditionScene + 4 разлома)
+  - core/expeditions.ts: 4 разлома (Кузнец/Аркана/Механизм/Хаос) с уникальными модификаторами и affixBias
+  - Бесконечная глубина: hp=30·1.35^d·mods, комнат 3+min(4,d/5)+bonus, награды растут с глубиной
+  - Комнаты: combat/treasure/event/elite/mystery/boss, веса по разлому (data-driven)
+  - Автофарм освоенных глубин в GameState.tick (без сцен), порог requiredDps, clearTime floor 20с, Механизм ×2
+  - Оффлайн-разломы: агрегированный расчёт (offlineClearBundle, эфф. 75%, кап оффлайна), сводка в Boot
+  - Хаос: случайные модификаторы HP/урона на заход; secretBonus 1.5% (кап 2% с базой 0.5%)
+  - ExpeditionScene (выбор + заход, боёвка как в данже) + ArtifactScene (крафт/рерoll/распыл/экип)
+  - SaveData v3 (riftProgress, мягкая миграция), 16 тестов экспедиций. Итого 68/68
 
 ## A3-fix pass (принят)
 - [x] secret-аффиксы: веса 0→25 (weighted picker больше не возвращает только первый), тесты покрытия пула

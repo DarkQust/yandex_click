@@ -24,6 +24,17 @@ import {
   craftArtifact,
   rerollArtifact,
 } from './artifacts';
+import {
+  RIFTS,
+  RiftDef,
+  RiftId,
+  ClearGrant,
+  fullClearRewards,
+  getRift,
+  offlineRiftGrants,
+  rollClearBundle,
+  tickAutoFarm,
+} from './expeditions';
 
 export interface TickEvents {
   goldGained: number;
@@ -79,7 +90,40 @@ export class GameState {
       this.autoSpawnAcc = 0;
     }
 
+    // автофарм разломов (идёт в любом UI и вне сцен)
+    for (const rift of RIFTS) {
+      const prog = this.data.riftProgress[rift.id];
+      if (!prog?.autoFarm) continue;
+      const [next, clears] = tickAutoFarm(prog, rift, this.totalDps(), cappedDt);
+      this.data.riftProgress[rift.id] = next;
+      for (let i = 0; i < clears; i++) {
+        this.grantRiftClear(rift, Math.max(1, prog.maxDepth));
+      }
+      if (clears > 0) {
+        next.clears += clears;
+      }
+    }
+
     return { goldGained, autoSpawned };
+  }
+
+  /** Начисление бандла за полную зачистку разлома (роллы дропа) */
+  private grantRiftClear(rift: RiftDef, depth: number, rng: () => number = Math.random): ClearGrant {
+    const bundle = rollClearBundle(fullClearRewards(depth, rift), rng);
+    return this.applyRiftGrant(rift, bundle);
+  }
+
+  /** Применение aggregated-наград (общий путь для автофарма и оффлайна) */
+  applyRiftGrant(rift: RiftDef, grant: ClearGrant): ClearGrant {
+    this.data.shards += grant.shards;
+    this.data.stabilizers += grant.stabilizers;
+    this.addGold(grant.gold);
+    for (let i = 0; i < grant.artifacts; i++) {
+      if (this.data.artifacts.length >= MAX_INVENTORY) break;
+      const art = craftArtifact(Math.random, rift.modifiers.rarityBonus, rift.modifiers.secretBonus);
+      this.data.artifacts.push(art);
+    }
+    return grant;
   }
 
   /** Экипированные артефакты */
@@ -193,6 +237,53 @@ export class GameState {
   /** Кап оффлайн-дохода в секундах: базовый 8ч + аффикс offlineCap (часы) */
   offlineCapSeconds(): number {
     return OFFLINE_CAP_SECONDS + (this.artifactTotals().offlineCap ?? 0) * 3600;
+  }
+
+  /** Следующая глубина для активного захода */
+  nextRiftDepth(riftId: RiftId): number {
+    return this.data.riftProgress[riftId].maxDepth + 1;
+  }
+
+  /** Завершение активного захода: фиксируем глубину */
+  completeRiftRun(riftId: RiftId, depthReached: number): void {
+    const p = this.data.riftProgress[riftId];
+    p.maxDepth = Math.max(p.maxDepth, depthReached);
+    p.clears += 1;
+  }
+
+  toggleAutoFarm(riftId: RiftId): boolean {
+    const p = this.data.riftProgress[riftId];
+    p.autoFarm = !p.autoFarm;
+    if (!p.autoFarm) p.autoFarmProgress = 0;
+    return p.autoFarm;
+  }
+
+  /** Оффлайн-награды разломов при старте; возвращает сводку для UI */
+  applyOfflineRifts(now: number = Date.now()): { rift: string; depth: number; grant: ClearGrant }[] {
+    const secondsAway = Math.floor((now - this.data.lastSeen) / 1000);
+    if (secondsAway < 60) return [];
+    const out: { rift: string; depth: number; grant: ClearGrant }[] = [];
+    for (const rift of RIFTS) {
+      const prog = this.data.riftProgress[rift.id];
+      const res = offlineRiftGrants(prog, rift, this.totalDps(), secondsAway, this.offlineCapSeconds());
+      if (!res) continue;
+      const grant = this.applyRiftGrant(rift, res.grant);
+      prog.clears += Math.floor(res.grant.shards / Math.max(1, fullClearRewards(res.depth, rift).shards));
+      out.push({ rift: rift.name, depth: res.depth, grant });
+    }
+    return out;
+  }
+
+  getRiftDef(riftId: RiftId): RiftDef {
+    return getRift(riftId);
+  }
+
+  /** Прямой дроп артефакта (без цены крафта) — награда разломов */
+  grantArtifactDrop(rift: RiftDef): Artifact | null {
+    if (this.data.artifacts.length >= MAX_INVENTORY) return null;
+    const art = craftArtifact(Math.random, rift.modifiers.rarityBonus, rift.modifiers.secretBonus);
+    this.data.artifacts.push(art);
+    return art;
   }
 
   /** Оффлайн-доход при старте (now инжектируем для тестов) */

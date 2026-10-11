@@ -4,6 +4,8 @@ import { EngineScene } from './scenes/EngineScene';
 import { ForgeScene } from './scenes/ForgeScene';
 import { DungeonScene } from './scenes/DungeonScene';
 import { SkillTreeScene } from './scenes/SkillTreeScene';
+import { ExpeditionScene } from './scenes/ExpeditionScene';
+import { ArtifactScene } from './scenes/ArtifactScene';
 
 const config: Phaser.Types.Core.GameConfig = {
   type: Phaser.AUTO,
@@ -15,7 +17,7 @@ const config: Phaser.Types.Core.GameConfig = {
     mode: Phaser.Scale.FIT,
     autoCenter: Phaser.Scale.CENTER_BOTH,
   },
-  scene: [BootScene, EngineScene, ForgeScene, DungeonScene, SkillTreeScene],
+  scene: [BootScene, EngineScene, ForgeScene, DungeonScene, SkillTreeScene, ExpeditionScene, ArtifactScene],
 };
 
 new Phaser.Game(config);

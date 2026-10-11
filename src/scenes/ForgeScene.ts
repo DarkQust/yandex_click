@@ -240,7 +240,7 @@ export class ForgeScene extends Phaser.Scene {
   private refreshHud(): void {
     const d = this.state.data;
     this.hudGold.setText(`🪙 ${formatNumber(d.gold)}`);
-    this.hudCrystals.setText(`💎 ${formatNumber(d.crystals)}   ✦ души: ${d.souls}`);
+    this.hudCrystals.setText(`💎 ${formatNumber(d.crystals)}   ✦ души: ${d.souls}   💠 ${d.shards}   🔩 ${d.stabilizers}`);
     this.hudIncome.setText(`Доход: ${formatNumber(this.state.incomePerSec())}/с`);
     this.hudDps.setText(`ДПС: ${formatNumber(this.state.totalDps())}   Волна: ${d.wave}`);
     const rem = this.state.doubleIncomeRemaining();

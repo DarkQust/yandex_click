@@ -4,6 +4,7 @@
 import { GRID_SIZE } from './config';
 import { Weapon } from './economy';
 import { Artifact, AFFIX_POOL, MAX_EQUIPPED, RARITIES } from './artifacts';
+import { RiftProgress, defaultRiftProgress, RIFTS, RiftId } from './expeditions';
 
 export interface SaveData {
   version: number;
@@ -23,10 +24,12 @@ export interface SaveData {
   stabilizers: number; // Стабилизаторы — рерoll аффиксов
   artifacts: Artifact[]; // инвентарь
   equippedIds: string[]; // экипированные (макс MAX_EQUIPPED)
+  // --- v3: Разломы ---
+  riftProgress: Record<string, RiftProgress>;
   lastSeen: number;
 }
 
-export const SAVE_VERSION = 2;
+export const SAVE_VERSION = 3;
 const LOCAL_KEY = 'forge_of_heroes_save_v1';
 
 export function createDefaultSave(): SaveData {
@@ -47,6 +50,7 @@ export function createDefaultSave(): SaveData {
     stabilizers: 2,
     artifacts: [],
     equippedIds: [],
+    riftProgress: defaultRiftProgress(),
     lastSeen: Date.now(),
   };
 }
@@ -102,6 +106,22 @@ export function sanitizeSave(raw: unknown): SaveData {
     grid,
     version: SAVE_VERSION,
   };
+  // riftProgress: заполняем недостающие разломы дефолтами, чистим лишние/битые
+  const riftDef = defaultRiftProgress();
+  if (r.riftProgress && typeof r.riftProgress === 'object') {
+    for (const rift of RIFTS) {
+      const rawP = (r.riftProgress as Record<string, Partial<RiftProgress>>)[rift.id as RiftId];
+      if (rawP && Number.isFinite(rawP.maxDepth)) {
+        riftDef[rift.id] = {
+          maxDepth: Math.max(0, Math.floor(rawP.maxDepth ?? 0)),
+          clears: Math.max(0, Math.floor(rawP.clears ?? 0)),
+          autoFarm: rawP.autoFarm === true,
+          autoFarmProgress: Number.isFinite(rawP.autoFarmProgress) ? Math.min(0.999, Math.max(0, rawP.autoFarmProgress ?? 0)) : 0,
+        };
+      }
+    }
+  }
+  out.riftProgress = riftDef;
   // очистка equippedIds: дубли, не-строки, ID отсутствующих артефактов, лимит слотов
   const inventoryIds = new Set(out.artifacts.map((a) => a.id));
   out.equippedIds = (Array.isArray(r.equippedIds) ? r.equippedIds : [])
