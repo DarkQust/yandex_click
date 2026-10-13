@@ -11,7 +11,9 @@ import {
   riftEnemyHp,
   riftRoomCount,
   tickAutoFarm,
+  probabilisticFloor,
 } from '../src/core/expeditions';
+import { craftArtifact } from '../src/core/artifacts';
 import { GameState } from '../src/core/gameState';
 import { sanitizeSave } from '../src/core/saveSystem';
 
@@ -169,3 +171,67 @@ describe('expeditions + GameState/save', () => {
   });
 });
 
+
+describe('A4 fix pass', () => {
+  // --- P3: affixBias реально смещает генерацию ---
+  it('affixBias boosts biased stat weights x3', () => {
+    // порядок пула: income18,dps16,click12,critC10,critM8,spawn8,offline6,lucky6,dungeon10,crystal6 (total 100)
+    // roll 0.9*100=90 → без биаса попадает в dungeonGold (cum 84..94)
+    const base = craftArtifact(seq([0.2, 0.9, 0.5]), 0, 0);
+    expect(base.affixes[0].stat).toBe('dungeonGold');
+    // с биасом crystal: вес 6→18, total 112, roll 0.9*112=100.8 → crystal (cum 94..112)
+    const biased = craftArtifact(seq([0.2, 0.9, 0.5]), 0, 0, ['crystal']);
+    expect(biased.affixes[0].stat).toBe('crystal');
+  });
+
+  it('forge artifacts bias towards dps-family stats', () => {
+    // статистически: 200 крафтов с биасом forge должны дать больше dps, чем без
+    let withBias = 0, withoutBias = 0;
+    let n = 0;
+    const rng = () => ((n = (n * 16807 + 11) % 2147483647) / 2147483647);
+    for (let i = 0; i < 200; i++) {
+      if (craftArtifact(rng, 0, 0, forge.affixBias).affixes.some((a) => a.stat === 'dps')) withBias++;
+      if (craftArtifact(rng, 0, 0).affixes.some((a) => a.stat === 'dps')) withoutBias++;
+    }
+    expect(withBias).toBeGreaterThan(withoutBias);
+  });
+
+  // --- P4: вероятностный оффлайн-дроп не теряет дробную часть ---
+  it('probabilisticFloor preserves expectation (no systematic loss)', () => {
+    // 0.7 × 3 = 2.1 → floor=2 + (rng<0.1)
+    expect(probabilisticFloor(2.1, () => 0.05)).toBe(3);
+    expect(probabilisticFloor(2.1, () => 0.5)).toBe(2);
+    // матожидание на 10000 бросков близко к 2.1
+    let sum = 0;
+    let n = 12345;
+    const rng = () => ((n = (n * 16807 + 11) % 2147483647) / 2147483647);
+    for (let i = 0; i < 10000; i++) sum += probabilisticFloor(2.1, rng);
+    expect(sum / 10000).toBeGreaterThan(2.05);
+    expect(sum / 10000).toBeLessThan(2.15);
+  });
+
+  it('offline bundle keeps stochastic drops instead of always flooring to zero', () => {
+    const rewards = { shards: 2, stabilizerChance: 0.5, artifactChance: 0.05, gold: 100 };
+    // раньше: 1 зачистка → floor(0.5)=0 стабилизаторов ВСЕГДА
+    const got = offlineClearBundle(rewards, 1, () => 0.4); // 0.4 < 0.5 → 1
+    expect(got.stabilizers).toBe(1);
+    const missed = offlineClearBundle(rewards, 1, () => 0.6);
+    expect(missed.stabilizers).toBe(0);
+  });
+
+  // --- P5: sanitize clears от NaN/Infinity/мусора ---
+  it('sanitize riftProgress: NaN/Infinity/negative cleared to 0', () => {
+    const s = sanitizeSave({
+      riftProgress: {
+        forge: { maxDepth: NaN, clears: NaN, autoFarm: true, autoFarmProgress: NaN },
+        arcane: { maxDepth: Infinity, clears: -5, autoFarm: true },
+        mechanism: { maxDepth: 3, clears: 7.9, autoFarm: false },
+      },
+    });
+    // NaN maxDepth → весь разлом на дефолты (gate по Number.isFinite)
+    expect(s.riftProgress.forge).toEqual({ maxDepth: 0, clears: 0, autoFarm: false, autoFarmProgress: 0 });
+    expect(s.riftProgress.arcane.clears).toBe(0); // -5 → 0
+    expect(s.riftProgress.mechanism.maxDepth).toBe(3);
+    expect(s.riftProgress.mechanism.clears).toBe(7); // 7.9 → 7
+  });
+});

@@ -285,12 +285,22 @@ export function rollClearBundle(rewards: RoomRewards, rng: () => number): ClearG
   };
 }
 
-/** Детерминированный aggregated бандл для оффлайна (без посимвольной симуляции) */
-export function offlineClearBundle(rewards: RoomRewards, clears: number): ClearGrant {
+/** floor + вероятностный остаток: floor(x) + (rng < frac ? 1 : 0). Сохраняет матожидание. */
+export function probabilisticFloor(x: number, rng: () => number): number {
+  const f = Math.floor(x);
+  return f + (rng() < x - f ? 1 : 0);
+}
+
+/**
+ * Aggregated бандл для оффлайна (без посимвольной симуляции каждого боя).
+ * Вероятностные выпадения НЕ теряются: floor + вероятностный остаток
+ * (матожидание = chance * clears).
+ */
+export function offlineClearBundle(rewards: RoomRewards, clears: number, rng: () => number = Math.random): ClearGrant {
   return {
     shards: rewards.shards * clears,
-    stabilizers: Math.floor(rewards.stabilizerChance * clears),
-    artifacts: Math.floor(rewards.artifactChance * clears),
+    stabilizers: probabilisticFloor(rewards.stabilizerChance * clears, rng),
+    artifacts: probabilisticFloor(rewards.artifactChance * clears, rng),
     gold: rewards.gold * clears,
   };
 }

@@ -26,6 +26,15 @@
 - [x] tests/engine.test.ts: 5 тестов регрессии idle-фриза (все зелёные, итого 23/23)
 - [x] tsc 0, eslint 0, build OK, smoke 200/200/200
 
+## A4-fix pass (принят)
+- [x] ExpeditionScene: таймер автоатаки снимается (clearAttackTimer при endRun/startRun), guard inRun в nextRoom vs stale delayedCall
+- [x] Boot offline: applyOfflineEarnings + applyOfflineRifts используют один lastSeen (без двойного начисления) — подтверждено, без изменений
+- [x] affixBias подключён: bias ×3 веса в rollAffix, craftArtifact(bias), дропы из разломов используют
+- [x] offlineClearBundle: probabilisticFloor (матожидание сохраняется, дробные дропы не теряются)
+- [x] sanitize riftProgress: safeNonNegInt vs NaN/Infinity/negatives
+- [x] ArtifactScene: clamp скролла после изменения списка
+- [x] Регрессионные тесты: +5 (итого 73/73), коммит A4-fix
+
 ## Следующая итерация (2)
 - [x] A1 фундамент (idle-фикс)
 - [x] A2 Раннер в данже + активный клик

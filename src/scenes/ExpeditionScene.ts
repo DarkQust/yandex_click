@@ -24,6 +24,7 @@ export class ExpeditionScene extends Phaser.Scene {
   private statusText!: Phaser.GameObjects.Text;
   private lootText!: Phaser.GameObjects.Text;
   private routeText!: Phaser.GameObjects.Text;
+  private attackTimer?: Phaser.Time.TimerEvent;
 
   constructor() {
     super('Expedition');
@@ -33,6 +34,14 @@ export class ExpeditionScene extends Phaser.Scene {
     this.state = this.registry.get('state') as GameState;
     this.add.rectangle(360, 640, 720, 1280, 0x140a1c).setAlpha(0.98).setInteractive();
     this.showRiftSelect();
+  }
+
+  /** Снять таймер автоатаки (копится между заходами, если не чистить) */
+  private clearAttackTimer(): void {
+    if (this.attackTimer) {
+      this.attackTimer.remove(false);
+      this.attackTimer = undefined;
+    }
   }
 
   // ---------- Выбор разлома ----------
@@ -121,7 +130,8 @@ export class ExpeditionScene extends Phaser.Scene {
       .setOrigin(0.5).setInteractive({ useHandCursor: true });
     exit.on('pointerdown', () => this.endRun(false));
 
-    this.time.addEvent({ delay: ATTACK_MS, loop: true, callback: () => this.autoAttack() });
+    this.clearAttackTimer();
+    this.attackTimer = this.time.addEvent({ delay: ATTACK_MS, loop: true, callback: () => this.autoAttack() });
     this.nextRoom();
   }
 
@@ -133,6 +143,7 @@ export class ExpeditionScene extends Phaser.Scene {
   }
 
   private nextRoom(): void {
+    if (!this.inRun) return; // вышли из захода — устаревшие delayedCall не выполняем
     if (this.roomIndex >= this.rooms.length) {
       this.endRun(true);
       return;
@@ -205,6 +216,7 @@ export class ExpeditionScene extends Phaser.Scene {
   }
 
   private endRun(completed: boolean): void {
+    this.clearAttackTimer();
     this.inRun = false;
     // выдача накопленной добычи
     this.state.data.shards += this.runLoot.shards;

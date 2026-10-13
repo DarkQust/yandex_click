@@ -23,6 +23,9 @@ export class ArtifactScene extends Phaser.Scene {
   private render(): void {
     this.children.removeAll(true);
     const d = this.state.data;
+    // кламп: после распыла/крафта скролл может выйти за границы списка
+    const maxScroll = Math.max(0, d.artifacts.length - 6);
+    this.scroll = Math.max(0, Math.min(this.scroll, maxScroll));
 
     this.add.rectangle(360, 640, 720, 1280, 0x101a14).setAlpha(0.98).setInteractive();
     this.add.text(360, 50, '📦 Артефакты', { fontSize: '40px', color: '#8affc0' }).setOrigin(0.5);

@@ -58,6 +58,11 @@ export function createDefaultSave(): SaveData {
 const VALID_STATS = new Set(AFFIX_POOL.map((a) => a.stat));
 
 /** Минимальная структурная валидация артефактов из сейва */
+/** Безопасное неотрицательное целое (NaN/Infinity/строки -> fallback) */
+function safeNonNegInt(v: unknown, fallback = 0): number {
+  return typeof v === 'number' && Number.isFinite(v) ? Math.max(0, Math.floor(v)) : fallback;
+}
+
 function sanitizeArtifacts(raw: unknown): Artifact[] {
   if (!Array.isArray(raw)) return [];
   const out: Artifact[] = [];
@@ -113,8 +118,8 @@ export function sanitizeSave(raw: unknown): SaveData {
       const rawP = (r.riftProgress as Record<string, Partial<RiftProgress>>)[rift.id as RiftId];
       if (rawP && Number.isFinite(rawP.maxDepth)) {
         riftDef[rift.id] = {
-          maxDepth: Math.max(0, Math.floor(rawP.maxDepth ?? 0)),
-          clears: Math.max(0, Math.floor(rawP.clears ?? 0)),
+          maxDepth: safeNonNegInt(rawP.maxDepth),
+          clears: safeNonNegInt(rawP.clears),
           autoFarm: rawP.autoFarm === true,
           autoFarmProgress: Number.isFinite(rawP.autoFarmProgress) ? Math.min(0.999, Math.max(0, rawP.autoFarmProgress ?? 0)) : 0,
         };

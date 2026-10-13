@@ -140,8 +140,11 @@ export function rollRarity(rng: () => number, rarityBonus = 0): Rarity {
   return 'common';
 }
 
-function rollAffix(rng: () => number, mult: number, taken: Set<StatId>, pool: AffixDef[]): Affix {
-  const candidates = pool.filter((a) => !taken.has(a.stat));
+function rollAffix(rng: () => number, mult: number, taken: Set<StatId>, pool: AffixDef[], bias: StatId[] = []): Affix {
+  const candidates = pool
+    .filter((a) => !taken.has(a.stat))
+    // аффиксы из bias-пула получают ×3 вес (предпочтение разлома)
+    .map((a) => (bias.includes(a.stat) ? { ...a, weight: a.weight * 3 } : a));
   const def = pickWeighted(candidates, rng);
   const raw = def.min + rng() * (def.max - def.min);
   const value = Math.round(raw * mult * 10) / 10;
@@ -154,14 +157,19 @@ function rollAffix(rng: () => number, mult: number, taken: Set<StatId>, pool: Af
  * @param rarityBonus сдвиг редкости (модификаторы разлома)
  * @param secretBonus добавка к шансу secret-аффикса
  */
-export function craftArtifact(rng: () => number, rarityBonus = 0, secretBonus = 0): Artifact {
+export function craftArtifact(
+  rng: () => number,
+  rarityBonus = 0,
+  secretBonus = 0,
+  bias: StatId[] = [],
+): Artifact {
   const rarity = rollRarity(rng, rarityBonus);
   const info = RARITY_INFO[rarity];
   const regular = AFFIX_POOL.filter((a) => !a.secret);
   const taken = new Set<StatId>();
   const affixes: Affix[] = [];
   for (let i = 0; i < info.affixes; i++) {
-    affixes.push(rollAffix(rng, info.valueMult, taken, regular));
+    affixes.push(rollAffix(rng, info.valueMult, taken, regular, bias));
   }
   // отдельный ролл secret-аффикса (добавляется сверх обычных)
   const secretChance = Math.min(MAX_SECRET_CHANCE, BASE_SECRET_CHANCE + Math.max(0, secretBonus));

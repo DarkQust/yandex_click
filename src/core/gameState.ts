@@ -120,7 +120,7 @@ export class GameState {
     this.addGold(grant.gold);
     for (let i = 0; i < grant.artifacts; i++) {
       if (this.data.artifacts.length >= MAX_INVENTORY) break;
-      const art = craftArtifact(Math.random, rift.modifiers.rarityBonus, rift.modifiers.secretBonus);
+        const art = craftArtifact(Math.random, rift.modifiers.rarityBonus, rift.modifiers.secretBonus, rift.affixBias);
       this.data.artifacts.push(art);
     }
     return grant;
@@ -281,7 +281,7 @@ export class GameState {
   /** Прямой дроп артефакта (без цены крафта) — награда разломов */
   grantArtifactDrop(rift: RiftDef): Artifact | null {
     if (this.data.artifacts.length >= MAX_INVENTORY) return null;
-    const art = craftArtifact(Math.random, rift.modifiers.rarityBonus, rift.modifiers.secretBonus);
+    const art = craftArtifact(Math.random, rift.modifiers.rarityBonus, rift.modifiers.secretBonus, rift.affixBias);
     this.data.artifacts.push(art);
     return art;
   }
