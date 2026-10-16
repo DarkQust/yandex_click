@@ -106,12 +106,27 @@ export class ForgeScene extends Phaser.Scene {
     btn.on('pointerdown', () => this.spawnWeapon());
 
     this.add
-      .text(500, 1170, 'Перетащите два одинаковых\nоружия для слияния', {
-        fontSize: '23px',
+      .text(360, 1080, 'Перетащите два одинаковых оружия для слияния', {
+        fontSize: '20px',
         color: '#c8b090',
-        align: 'center',
       })
       .setOrigin(0.5);
+
+    this.makeButton(170, 1135, '🌀 Разломы', () => {
+      this.scene.launch('Expedition');
+    }, 200, 52, 'btn', 18);
+    this.makeButton(390, 1135, '📦 Артефакты', () => {
+      this.scene.launch('Artifact');
+    }, 200, 52, 'btn', 18);
+    this.makeButton(600, 1135, '🏹 Охота', () => {
+      this.scene.launch('Hunt');
+    }, 190, 52, 'btn', 18);
+    this.makeButton(160, 1210, '🏰 Данж', () => {
+      this.scene.launch('Dungeon');
+    }, 190, 52, 'btn', 18);
+    this.makeButton(480, 1210, '🐾 Питомцы', () => {
+      this.scene.launch('Pet');
+    }, 240, 52, 'btn', 18);
   }
 
   /** Сцена больше не начисляет экономику (это делает EngineScene). Только обновление UI. */
@@ -240,7 +255,7 @@ export class ForgeScene extends Phaser.Scene {
   private refreshHud(): void {
     const d = this.state.data;
     this.hudGold.setText(`🪙 ${formatNumber(d.gold)}`);
-    this.hudCrystals.setText(`💎 ${formatNumber(d.crystals)}   ✦ души: ${d.souls}   💠 ${d.shards}   🔩 ${d.stabilizers}`);
+    this.hudCrystals.setText(`💎 ${formatNumber(d.crystals)}   💠 ${d.shards}   🔩 ${d.stabilizers}   🎣 ${d.bait}   🗝 ${d.keys}`);
     this.hudIncome.setText(`Доход: ${formatNumber(this.state.incomePerSec())}/с`);
     this.hudDps.setText(`ДПС: ${formatNumber(this.state.totalDps())}   Волна: ${d.wave}`);
     const rem = this.state.doubleIncomeRemaining();

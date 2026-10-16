@@ -15,6 +15,7 @@ import { computeSkillEffects, SkillEffects } from './skills';
 import {
   Artifact,
   CRAFT_COST_SHARDS,
+  Rarity,
   MAX_EQUIPPED,
   MAX_INVENTORY,
   RARITY_INFO,
@@ -35,6 +36,19 @@ import {
   rollClearBundle,
   tickAutoFarm,
 } from './expeditions';
+import { CreatureDef, HuntRewards, HuntRunState, startHunt } from './hunts';
+
+import {
+  CASE_COST_KEYS,
+  MAX_ACTIVE_PETS,
+  MAX_PET_LEVEL,
+  Pet,
+  PetStat,
+  petFeedCost,
+  petTeamTotals,
+  petFromCapture,
+  openPetCase,
+} from './pets';
 
 export interface TickEvents {
   goldGained: number;
@@ -118,6 +132,10 @@ export class GameState {
     this.data.shards += grant.shards;
     this.data.stabilizers += grant.stabilizers;
     this.addGold(grant.gold);
+    this.data.bait += grant.bait ?? 0;
+    // ключи: шанс усиливается keyChance-бонусами (питомцы, secret-аффикс)
+    const keyMult = 1 + (this.artifactTotals().keyChance ?? 0) / 100 + this.petKeyBonus();
+    this.data.keys += Math.round((grant.keys ?? 0) * keyMult);
     for (let i = 0; i < grant.artifacts; i++) {
       if (this.data.artifacts.length >= MAX_INVENTORY) break;
         const art = craftArtifact(Math.random, rift.modifiers.rarityBonus, rift.modifiers.secretBonus, rift.affixBias);
@@ -132,6 +150,22 @@ export class GameState {
     return this.data.artifacts.filter((a) => ids.has(a.id));
   }
 
+  /** Команда активных питомцев */
+  activePets(): Pet[] {
+    const ids = new Set(this.data.activePetIds);
+    return this.data.pets.filter((p) => ids.has(p.uid));
+  }
+
+  /** Суммарные бонусы команды питомцев с учётом petEfficiency артефактов */
+  petTotals(): Record<PetStat, number> {
+    const raw = petTeamTotals(this.activePets());
+    const eff = 1 + (this.artifactTotals().petEfficiency ?? 0) / 100; // secret-аффикс
+    for (const k of Object.keys(raw) as PetStat[]) {
+      raw[k] = Math.round(raw[k] * eff * 10) / 10;
+    }
+    return raw;
+  }
+
   /** Суммарные статы экипированных артефактов (в процентах) */
   artifactTotals(): Record<StatId, number> {
     return artifactTotals(this.equippedArtifacts());
@@ -141,12 +175,14 @@ export class GameState {
   incomeMult(now = Date.now()): number {
     const doubleActive = this.data.doubleIncomeUntil > now ? 2 : 1;
     const art = 1 + (this.artifactTotals().income ?? 0) / 100;
-    return this.effects.incomeMult * prestigeMultiplier(this.data.souls) * art * doubleActive;
+    const pet = 1 + (this.petTotals().income ?? 0) / 100;
+    return this.effects.incomeMult * prestigeMultiplier(this.data.souls) * art * pet * doubleActive;
   }
 
   dpsMult(): number {
     const art = 1 + (this.artifactTotals().dps ?? 0) / 100;
-    return this.effects.dpsMult * prestigeMultiplier(this.data.souls) * art;
+    const pet = 1 + (this.petTotals().dps ?? 0) / 100;
+    return this.effects.dpsMult * prestigeMultiplier(this.data.souls) * art * pet;
   }
 
   totalCritChance(): number {
@@ -164,7 +200,8 @@ export class GameState {
   }
 
   totalDungeonGoldMult(): number {
-    return this.effects.dungeonGoldMult * (1 + (this.artifactTotals().dungeonGold ?? 0) / 100);
+    const pet = 1 + (this.petTotals().dungeonGold ?? 0) / 100;
+    return this.effects.dungeonGoldMult * (1 + (this.artifactTotals().dungeonGold ?? 0) / 100) * pet;
   }
 
   totalCrystalMult(): number {
@@ -173,7 +210,8 @@ export class GameState {
 
   /** Бонус к шансу secret-аффикса (пока 0; бустится разломом Хаоса) */
   shardBonusMult(): number {
-    return 1 + (this.artifactTotals().shardBonus ?? 0) / 100;
+    const pet = 1 + (this.petTotals().shardBonus ?? 0) / 100;
+    return (1 + (this.artifactTotals().shardBonus ?? 0) / 100) * pet;
   }
 
   incomePerSec(now = Date.now()): number {
@@ -187,7 +225,8 @@ export class GameState {
   /** Урон активного клика в данже (минимум 1, артефакты усиливают) */
   clickDamage(): number {
     const art = 1 + (this.artifactTotals().click ?? 0) / 100;
-    return Math.max(1, this.totalDps() * CLICK_DAMAGE_RATIO * art);
+    const pet = 1 + (this.petTotals().click ?? 0) / 100;
+    return Math.max(1, this.totalDps() * CLICK_DAMAGE_RATIO * art * pet);
   }
 
   spawnCostNow(): number {
@@ -276,6 +315,66 @@ export class GameState {
 
   getRiftDef(riftId: RiftId): RiftDef {
     return getRift(riftId);
+  }
+
+  // ---------- Охота и питомцы ----------
+
+  /** Бонус команды к шансу поимки (для Hunts) */
+  petCaptureBonus(): number {
+    return (this.petTotals().captureChance ?? 0) / 100;
+  }
+
+  /** Бонус команды к шансу ключа (используется рифтами/охотой) */
+  petKeyBonus(): number {
+    return (this.petTotals().keyChance ?? 0) / 100;
+  }
+
+  /** Начать охоту: тратит приманку; возвращает null, если приманок нет */
+  startHunt(creature: CreatureDef, rarity: Rarity, rng: () => number = Math.random): HuntRunState | null {
+    if (this.data.bait < 1) return null;
+    this.data.bait -= 1;
+    return startHunt(creature, rarity, this.totalDps(), this.petCaptureBonus(), rng);
+  }
+
+  /** Завершение охоты: выдача награды и (при поимке) питомца */
+  finishHunt(run: HuntRunState, rewards: HuntRewards, captured: boolean, rng: () => number = Math.random): void {
+    this.data.petFood += rewards.food;
+    this.data.keys += rewards.keys;
+    this.addGold(rewards.gold);
+    if (captured) {
+      const pet = petFromCapture(run.creature.species, run.creatureRarity, rng);
+      this.data.pets.push(pet);
+    }
+    this.data.huntsWon += 1;
+  }
+
+  /** Открыть кейс питомца за ключи */
+  openCase(rng: () => number = Math.random): Pet | null {
+    if (this.data.keys < CASE_COST_KEYS) return null;
+    this.data.keys -= CASE_COST_KEYS;
+    const pet = openPetCase(rng);
+    this.data.pets.push(pet);
+    return pet;
+  }
+
+  /** Покормить питомца (+уровень) */
+  feedPet(uid: string): boolean {
+    const pet = this.data.pets.find((x) => x.uid === uid);
+    if (!pet || pet.level >= MAX_PET_LEVEL) return false;
+    const cost = petFeedCost(pet.level);
+    if (this.data.petFood < cost) return false;
+    this.data.petFood -= cost;
+    pet.level += 1;
+    return true;
+  }
+
+  setActivePet(uid: string, active: boolean): void {
+    if (active) {
+      if (this.data.activePetIds.length >= MAX_ACTIVE_PETS) return;
+      if (!this.data.activePetIds.includes(uid)) this.data.activePetIds.push(uid);
+    } else {
+      this.data.activePetIds = this.data.activePetIds.filter((x) => x !== uid);
+    }
   }
 
   /** Прямой дроп артефакта (без цены крафта) — награда разломов */

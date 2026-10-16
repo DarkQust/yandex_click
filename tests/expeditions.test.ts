@@ -211,7 +211,7 @@ describe('A4 fix pass', () => {
   });
 
   it('offline bundle keeps stochastic drops instead of always flooring to zero', () => {
-    const rewards = { shards: 2, stabilizerChance: 0.5, artifactChance: 0.05, gold: 100 };
+    const rewards = { shards: 2, stabilizerChance: 0.5, artifactChance: 0.05, gold: 100, baitChance: 0, keyChance: 0 };
     // раньше: 1 зачистка → floor(0.5)=0 стабилизаторов ВСЕГДА
     const got = offlineClearBundle(rewards, 1, () => 0.4); // 0.4 < 0.5 → 1
     expect(got.stabilizers).toBe(1);

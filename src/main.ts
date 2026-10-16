@@ -6,6 +6,8 @@ import { DungeonScene } from './scenes/DungeonScene';
 import { SkillTreeScene } from './scenes/SkillTreeScene';
 import { ExpeditionScene } from './scenes/ExpeditionScene';
 import { ArtifactScene } from './scenes/ArtifactScene';
+import { HuntScene } from './scenes/HuntScene';
+import { PetScene } from './scenes/PetScene';
 
 const config: Phaser.Types.Core.GameConfig = {
   type: Phaser.AUTO,
@@ -17,7 +19,7 @@ const config: Phaser.Types.Core.GameConfig = {
     mode: Phaser.Scale.FIT,
     autoCenter: Phaser.Scale.CENTER_BOTH,
   },
-  scene: [BootScene, EngineScene, ForgeScene, DungeonScene, SkillTreeScene, ExpeditionScene, ArtifactScene],
+  scene: [BootScene, EngineScene, ForgeScene, DungeonScene, SkillTreeScene, ExpeditionScene, ArtifactScene, HuntScene, PetScene],
 };
 
 new Phaser.Game(config);

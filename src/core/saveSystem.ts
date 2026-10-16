@@ -5,6 +5,8 @@ import { GRID_SIZE } from './config';
 import { Weapon } from './economy';
 import { Artifact, AFFIX_POOL, MAX_EQUIPPED, RARITIES } from './artifacts';
 import { RiftProgress, defaultRiftProgress, RIFTS, RiftId } from './expeditions';
+import { Pet, PetSpeciesId, MAX_ACTIVE_PETS, PET_SPECIES } from './pets';
+
 
 export interface SaveData {
   version: number;
@@ -26,10 +28,17 @@ export interface SaveData {
   equippedIds: string[]; // экипированные (макс MAX_EQUIPPED)
   // --- v3: Разломы ---
   riftProgress: Record<string, RiftProgress>;
+  // --- v4: Охота и питомцы ---
+  pets: Pet[];
+  activePetIds: string[]; // команда до MAX_ACTIVE_PETS
+  keys: number; // ключи от кейсов питомцев
+  bait: number; // приманки для охоты
+  petFood: number; // корм для прокачки
+  huntsWon: number;
   lastSeen: number;
 }
 
-export const SAVE_VERSION = 3;
+export const SAVE_VERSION = 4;
 const LOCAL_KEY = 'forge_of_heroes_save_v1';
 
 export function createDefaultSave(): SaveData {
@@ -51,6 +60,12 @@ export function createDefaultSave(): SaveData {
     artifacts: [],
     equippedIds: [],
     riftProgress: defaultRiftProgress(),
+    pets: [],
+    activePetIds: [],
+    keys: 1, // стартовая: знакомство с кейсами
+    bait: 2, // стартовые: первые охоты
+    petFood: 3,
+    huntsWon: 0,
     lastSeen: Date.now(),
   };
 }
@@ -91,6 +106,28 @@ function sanitizeArtifacts(raw: unknown): Artifact[] {
   return out;
 }
 
+/** Минимальная структурная валидация питомцев из сейва */
+function sanitizePets(raw: unknown): Pet[] {
+  if (!Array.isArray(raw)) return [];
+  const speciesIds = new Set(PET_SPECIES.map((x) => x.id as string));
+  const out: Pet[] = [];
+  for (const item of raw) {
+    if (!item || typeof item !== 'object') continue;
+    const p = item as Partial<Pet>;
+    if (typeof p.uid !== 'string' || p.uid.length === 0) continue;
+    if (typeof p.species !== 'string' || !speciesIds.has(p.species as PetSpeciesId)) continue;
+    if (typeof p.rarity !== 'string' || !RARITIES.includes(p.rarity)) continue;
+    out.push({
+      uid: p.uid,
+      species: p.species as PetSpeciesId,
+      rarity: p.rarity,
+      level: Math.max(1, Math.min(10, safeNonNegInt(p.level, 1) || 1)),
+      name: typeof p.name === 'string' ? p.name : '',
+    });
+  }
+  return out;
+}
+
 /** Валидация и миграция загруженных данных */
 export function sanitizeSave(raw: unknown): SaveData {
   const def = createDefaultSave();
@@ -106,6 +143,10 @@ export function sanitizeSave(raw: unknown): SaveData {
     souls: Number.isFinite(r.souls) ? (r.souls as number) : 0,
     skills: r.skills && typeof r.skills === 'object' ? r.skills : {},
     shards: Number.isFinite(r.shards) ? (r.shards as number) : 30,
+    keys: safeNonNegInt(r.keys, 1),
+    bait: safeNonNegInt(r.bait, 2),
+    petFood: safeNonNegInt(r.petFood, 3),
+    huntsWon: safeNonNegInt(r.huntsWon, 0),
     stabilizers: Number.isFinite(r.stabilizers) ? (r.stabilizers as number) : 2,
     artifacts: sanitizeArtifacts(r.artifacts),
     grid,
@@ -127,6 +168,14 @@ export function sanitizeSave(raw: unknown): SaveData {
     }
   }
   out.riftProgress = riftDef;
+  // питомцы: структурная валидация + команда без дублей/призраков/лимита
+  out.pets = sanitizePets(r.pets);
+  const petIds = new Set(out.pets.map((x) => x.uid));
+  out.activePetIds = (Array.isArray(r.activePetIds) ? r.activePetIds : [])
+    .filter((id): id is string => typeof id === 'string')
+    .filter((id, i, arr) => arr.indexOf(id) === i)
+    .filter((id) => petIds.has(id))
+    .slice(0, MAX_ACTIVE_PETS);
   // очистка equippedIds: дубли, не-строки, ID отсутствующих артефактов, лимит слотов
   const inventoryIds = new Set(out.artifacts.map((a) => a.id));
   out.equippedIds = (Array.isArray(r.equippedIds) ? r.equippedIds : [])

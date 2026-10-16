@@ -54,6 +54,8 @@ export interface RoomRewards {
   stabilizerChance: number; // 0..1
   artifactChance: number; // 0..1
   gold: number;
+  baitChance: number; // 0..1 (охота)
+  keyChance: number; // 0..1 (кейсы питомцев)
 }
 
 // ---------- Определения разломов ----------
@@ -151,21 +153,23 @@ export function roomRewards(depth: number, type: RoomType, rift: RiftDef): RoomR
   const gold = Math.floor(RIFT_GOLD_BASE * Math.pow(RIFT_GOLD_GROWTH, depth - 1));
   switch (type) {
     case 'combat':
-      return { shards, stabilizerChance: 0, artifactChance: 0, gold };
+      return { shards, stabilizerChance: 0, artifactChance: 0, gold, baitChance: 0, keyChance: 0 };
     case 'elite':
-      return { shards: shards * 2, stabilizerChance: 0.25, artifactChance: 0.05, gold: gold * 2 };
+      return { shards: shards * 2, stabilizerChance: 0.25, artifactChance: 0.05, gold: gold * 2, baitChance: 0, keyChance: 0.05 };
     case 'treasure':
-      return { shards: shards * 3, stabilizerChance: 0.1, artifactChance: 0, gold: gold };
+      return { shards: shards * 3, stabilizerChance: 0.1, artifactChance: 0, gold, baitChance: 0.1, keyChance: 0 };
     case 'event':
-      return { shards, stabilizerChance: 0.15, artifactChance: 0.03, gold: Math.floor(gold * 1.5) };
+      return { shards, stabilizerChance: 0.15, artifactChance: 0.03, gold: Math.floor(gold * 1.5), baitChance: 0.05, keyChance: 0.02 };
     case 'mystery':
-      return { shards: Math.floor(shards * 1.5), stabilizerChance: 0.2, artifactChance: 0.05, gold };
+      return { shards: Math.floor(shards * 1.5), stabilizerChance: 0.2, artifactChance: 0.05, gold, baitChance: 0.08, keyChance: 0.03 };
     case 'boss':
       return {
         shards: shards * 3,
         stabilizerChance: 0.5,
         artifactChance: 0.15 + Math.min(0.25, depth * 0.005),
         gold: gold * 4,
+        baitChance: 0.15,
+        keyChance: 0.08,
       };
   }
 }
@@ -245,9 +249,11 @@ export function fullClearRewards(depth: number, rift: RiftDef): RoomRewards {
       acc.stabilizerChance += r.stabilizerChance * share;
       acc.artifactChance += r.artifactChance * share;
       acc.gold += r.gold * share;
+      acc.baitChance += (r.baitChance ?? 0) * share;
+      acc.keyChance += (r.keyChance ?? 0) * share;
       return acc;
     },
-    { shards: 0, stabilizerChance: 0, artifactChance: 0, gold: 0 },
+    { shards: 0, stabilizerChance: 0, artifactChance: 0, gold: 0, baitChance: 0, keyChance: 0 },
   );
   const boss = roomRewards(depth, 'boss', rift);
   return {
@@ -255,6 +261,8 @@ export function fullClearRewards(depth: number, rift: RiftDef): RoomRewards {
     stabilizerChance: Math.min(1, (avg.stabilizerChance * n) + boss.stabilizerChance),
     artifactChance: Math.min(0.6, (avg.artifactChance * n) + boss.artifactChance),
     gold: Math.floor(avg.gold * n) + boss.gold,
+    baitChance: Math.min(0.9, (avg.baitChance * n) + (boss.baitChance ?? 0)),
+    keyChance: Math.min(0.5, (avg.keyChance * n) + (boss.keyChance ?? 0)),
   };
 }
 
@@ -271,8 +279,10 @@ export function defaultRiftProgress(): Record<RiftId, RiftProgress> {
 export interface ClearGrant {
   shards: number;
   stabilizers: number;
-  artifacts: number; // количество артефактов-дропов (редкость по rift при выдаче)
+  artifacts: number;
   gold: number;
+  bait: number;
+  keys: number;
 }
 
 /** Ролл бандла одной зачистки (активный автoфарм) */
@@ -282,6 +292,8 @@ export function rollClearBundle(rewards: RoomRewards, rng: () => number): ClearG
     stabilizers: rng() < rewards.stabilizerChance ? 1 : 0,
     artifacts: rng() < rewards.artifactChance ? 1 : 0,
     gold: rewards.gold,
+    bait: rng() < rewards.baitChance ? 1 : 0,
+    keys: rng() < rewards.keyChance ? 1 : 0,
   };
 }
 
@@ -302,6 +314,8 @@ export function offlineClearBundle(rewards: RoomRewards, clears: number, rng: ()
     stabilizers: probabilisticFloor(rewards.stabilizerChance * clears, rng),
     artifacts: probabilisticFloor(rewards.artifactChance * clears, rng),
     gold: rewards.gold * clears,
+    bait: probabilisticFloor((rewards.baitChance ?? 0) * clears, rng),
+    keys: probabilisticFloor((rewards.keyChance ?? 0) * clears, rng),
   };
 }
 
