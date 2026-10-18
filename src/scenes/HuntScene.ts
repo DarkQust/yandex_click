@@ -10,6 +10,7 @@ import {
   captureChance,
   computeRunMods,
   defeatRewards,
+  lifestealHeal,
   rollCreatureRarity,
   rollDraft,
   victoryRewards,
@@ -39,6 +40,9 @@ export class HuntScene extends Phaser.Scene {
   private hint2Text!: Phaser.GameObjects.Text;
   private modText!: Phaser.GameObjects.Text;
   private creatureTimer?: Phaser.Time.TimerEvent;
+  private dpsTimer?: Phaser.Time.TimerEvent;
+  private eliteDone = false; // элита проходится ОДИН раз за забег
+  private runRef: HuntRunState | null = null; // защита callbacks от старого забега
 
   constructor() {
     super('Hunt');
@@ -95,6 +99,9 @@ export class HuntScene extends Phaser.Scene {
     const run = this.state.startHunt(creature, rarity);
     if (!run) return; // нет приманок
     this.run = run;
+    this.runRef = run;
+    this.eliteDone = false;
+    this.clearTimers();
     this.children.removeAll(true);
     this.add.rectangle(360, 640, 720, 1280, 0x0c1a12).setAlpha(0.98).setInteractive();
 
@@ -114,10 +121,13 @@ export class HuntScene extends Phaser.Scene {
   }
 
   private retreat(): void {
-    if (!this.run) return;
+    if (!this.run || this.run.phase === 'won' || this.run.phase === 'lost') return;
+    const run = this.run;
+    run.phase = 'lost'; // блокируем повторные завершения и stale-callbacks
+    this.clearTimers();
     // отступление: забираем найденное на шагах, существо упущено
-    const rw = defeatRewards(this.run);
-    this.state.finishHunt(this.run, rw, false);
+    const rw = defeatRewards(run);
+    this.state.finishHunt(run, rw, false, false);
     this.state.save();
     this.showSelect();
   }
@@ -155,11 +165,12 @@ export class HuntScene extends Phaser.Scene {
       const color = CARD_COLORS[card.rarity];
       const box = this.add.rectangle(x, y, 190, 260, 0x14231a)
         .setStrokeStyle(3, color).setInteractive({ useHandCursor: true });
+      box.setData('draft', true); // помечаем для точечной очистки
       // placeholder-рамка: сюда встанет арт карточки (этап B)
-      this.add.rectangle(x, y - 70, 170, 120, 0x0e1a14).setStrokeStyle(1, color);
-      this.add.text(x, y - 70, card.rarity === 'legendary' ? '★' : '', { fontSize: '30px', color: '#ffd24a' }).setOrigin(0.5);
-      this.add.text(x, y + 5, card.name, { fontSize: '19px', color: '#ffffff', align: 'center', wordWrap: { width: 175 } }).setOrigin(0.5, 0.5);
-      this.add.text(x, y + 60, card.description, { fontSize: '15px', color: '#c8d8c8', align: 'center', wordWrap: { width: 175 } }).setOrigin(0.5);
+      this.add.rectangle(x, y - 70, 170, 120, 0x0e1a14).setStrokeStyle(1, color).setData('draft', true);
+      this.add.text(x, y - 70, card.rarity === 'legendary' ? '★' : '', { fontSize: '30px', color: '#ffd24a' }).setOrigin(0.5).setData('draft', true);
+      this.add.text(x, y + 5, card.name, { fontSize: '19px', color: '#ffffff', align: 'center', wordWrap: { width: 175 } }).setOrigin(0.5, 0.5).setData('draft', true);
+      this.add.text(x, y + 60, card.description, { fontSize: '15px', color: '#c8d8c8', align: 'center', wordWrap: { width: 175 } }).setOrigin(0.5).setData('draft', true);
       box.on('pointerdown', () => this.pickCard(card, cards));
     });
   }
@@ -167,10 +178,20 @@ export class HuntScene extends Phaser.Scene {
   private pickCard(card: HuntCard, cards: HuntCard[]): void {
     if (this.busy || !this.run) return;
     this.busy = true;
-    this.run.pickedCards.push(card);
+    const run = this.run;
+    const beforeMax = computeRunMods(run).staminaMax;
+    run.pickedCards.push(card);
+    const mods = computeRunMods(run);
+    // карточки выносливости: рост максимума поднимает текущую, лечение применяется сразу
+    const delta = mods.staminaMax - beforeMax;
+    if (delta > 0) run.stamina += delta;
+    if (mods.staminaHeal > 0) run.stamina = Math.min(mods.staminaMax, run.stamina + mods.staminaHeal);
+    run.stamina = Math.min(run.stamina, mods.staminaMax);
     this.refreshMods();
-    // убрать все карточки драфта
-    this.children.list.filter((o) => o instanceof Phaser.GameObjects.Rectangle).forEach((o) => o.destroy());
+    // убрать ТОЛЬКО объекты драфта (не весь UI)
+    this.children.list
+      .filter((o) => o.getData && o.getData('draft') === true)
+      .forEach((o) => o.destroy());
     void cards;
     this.tweens.addCounter({
       from: 0, to: 1, duration: 300,
@@ -184,6 +205,11 @@ export class HuntScene extends Phaser.Scene {
   /** Элитная стычка: быстрая проверка выносливости, +награда и +1 карточка */
   private startElite(): void {
     const run = this.run!;
+    if (this.eliteDone) {
+      this.startFinal(); // элита уже пройдена — не зацикливаемся
+      return;
+    }
+    this.eliteDone = true;
     this.statusText.setText('👹 Элитный зверь преградил путь!');
     const dmg = Math.max(5, Math.floor(run.creatureAtk * 0.8));
     const mods = computeRunMods(run);
@@ -227,6 +253,7 @@ export class HuntScene extends Phaser.Scene {
 
     // атака игрока по клику
     sprite.on('pointerdown', () => {
+      if (this.runRef !== run || !this.run || this.run.phase !== 'final') return;
       const mods = computeRunMods(run);
       let dmg = this.state.clickDamage() * mods.clickMult * mods.dmgMult;
       if (Math.random() < mods.critChance) dmg *= 3;
@@ -238,11 +265,11 @@ export class HuntScene extends Phaser.Scene {
     });
 
     // авто-ДПС игрока (клики ускоряют, но не обязательны)
-    const dpsTimer = this.time.addEvent({
+    this.dpsTimer = this.time.addEvent({
       delay: 700,
       loop: true,
       callback: () => {
-        if (!this.run || this.run.phase !== 'final') return;
+        if (this.runRef !== run || !this.run || this.run.phase !== 'final') return;
         const mods = computeRunMods(run);
         const dmg = this.state.totalDps() * 0.7 * mods.dmgMult;
         run.creatureHp -= dmg;
@@ -251,14 +278,13 @@ export class HuntScene extends Phaser.Scene {
         if (run.creatureHp <= 0) this.victory();
       },
     });
-    void dpsTimer;
 
     // ответные удары существа по выносливости
     this.creatureTimer = this.time.addEvent({
       delay: CREATURE_ATTACK_MS,
       loop: true,
       callback: () => {
-        if (!this.run || this.run.phase !== 'final') return;
+        if (this.runRef !== run || !this.run || this.run.phase !== 'final') return;
         run.stamina -= run.creatureAtk;
         updateBars();
         if (run.stamina <= 0) this.defeat();
@@ -269,19 +295,20 @@ export class HuntScene extends Phaser.Scene {
   private applyLifesteal(run: HuntRunState, dmg: number): void {
     const mods = computeRunMods(run);
     if (mods.lifesteal > 0) {
-      run.stamina = Math.min(mods.staminaMax, run.stamina + dmg * mods.lifesteal * 0.01);
+      run.stamina = Math.min(mods.staminaMax, run.stamina + lifestealHeal(dmg, mods));
     }
   }
 
   private victory(): void {
-    if (!this.run) return;
-    this.clearTimers();
+    if (!this.run || this.run.phase !== 'final') return; // защита от повторного вызова
     const run = this.run;
     run.phase = 'won';
-    const chance = captureChance(run, this.state.petCaptureBonus());
+    this.clearTimers();
+    // extraCapture уже содержит бонус питомцев (startHunt) — не учитываем дважды
+    const chance = captureChance(run);
     const captured = Math.random() < chance;
-    const rw = victoryRewards(run, this.state.incomePerSec());
-    this.state.finishHunt(run, rw, captured);
+    const rw = victoryRewards(run, this.state.incomePerSec(), Math.random, this.state.totalKeyBonus());
+    this.state.finishHunt(run, rw, captured, true);
     this.state.save();
 
     this.children.removeAll(true);
@@ -301,12 +328,12 @@ export class HuntScene extends Phaser.Scene {
   }
 
   private defeat(): void {
-    if (!this.run) return;
-    this.clearTimers();
+    if (!this.run || this.run.phase !== 'final') return;
     const run = this.run;
     run.phase = 'lost';
+    this.clearTimers();
     const rw = defeatRewards(run);
-    this.state.finishHunt(run, rw, false);
+    this.state.finishHunt(run, rw, false, false);
     this.state.save();
 
     this.children.removeAll(true);
@@ -335,9 +362,11 @@ export class HuntScene extends Phaser.Scene {
   }
 
   private clearTimers(): void {
-    if (this.creatureTimer) {
-      this.creatureTimer.remove(false);
-      this.creatureTimer = undefined;
+    for (const t of [this.creatureTimer, this.dpsTimer]) {
+      if (t) t.remove(false);
     }
+    this.creatureTimer = undefined;
+    this.dpsTimer = undefined;
+    this.runRef = null; // все callback'ы старого забега мертвы
   }
 }

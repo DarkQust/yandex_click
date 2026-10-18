@@ -213,7 +213,7 @@ export class DungeonScene extends Phaser.Scene {
       msg += `, +${crystals} 💎`;
       // редкие ресурсы охоты: приманка и ключ
       if (Math.random() < 0.2) { this.state.data.bait += 1; msg += ', 🎣приманка'; }
-      if (Math.random() < 0.05 + this.state.petKeyBonus()) { this.state.data.keys += 1; msg += ', 🗝ключ'; }
+      if (Math.random() < Math.min(0.95, 0.05 + this.state.totalKeyBonus())) { this.state.data.keys += 1; msg += ', 🗝ключ'; }
       if (this.state.data.bossesKilled % INTERSTITIAL_BOSS_INTERVAL === 0) void ya.showInterstitial();
       void ya.submitLeaderboard(this.state.data.lifetimeGold);
     }

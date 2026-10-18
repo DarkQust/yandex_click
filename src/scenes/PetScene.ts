@@ -110,6 +110,17 @@ export class PetScene extends Phaser.Scene {
       this.state.save();
       this.render();
     });
+
+    const releaseBtn = this.add.text(410, y + 35, 'Отпустить', {
+      fontSize: '16px', color: '#ffb0a0', backgroundColor: '#302020', padding: { x: 8, y: 4 },
+    }).setInteractive({ useHandCursor: true });
+    releaseBtn.on('pointerdown', (ptr: Phaser.Input.Pointer) => {
+      ptr.event.stopPropagation();
+      const gained = this.state.releasePet(pet.uid);
+      this.toast(gained > 0 ? `Отпущен: +${gained} 🍗` : 'Питомец не найден');
+      this.state.save();
+      this.render();
+    });
   }
 
   private toast(text: string): void {

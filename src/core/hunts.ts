@@ -59,9 +59,13 @@ export function creatureHp(playerDps: number, rarity: Rarity): number {
   return Math.max(60, Math.floor(playerDps * 22 * CREATURE_HP_RARITY_MULT[rarity]));
 }
 
-/** Урон существа по выносливости за атаку (раз в 2.5с в финале; масштаб от силы игрока) */
-export function creatureAttack(playerDps: number, rarity: Rarity): number {
-  return Math.max(4, Math.floor(playerDps * 0.02 * CREATURE_HP_RARITY_MULT[rarity]));
+/**
+ * Урон существа по выносливости за атаку (раз в 2.5с).
+ * Масштаб — от бюджета выносливости (стамина не растёт с ДПС игрока,
+ * поэтому атака тоже НЕ должна масштабироваться от ДПС): ~5% базы за удар.
+ */
+export function creatureAttack(rarity: Rarity, staminaBase = 100): number {
+  return Math.max(4, Math.floor(staminaBase * 0.05 * CREATURE_HP_RARITY_MULT[rarity]));
 }
 
 // ---------- Карточки забега ----------
@@ -234,7 +238,7 @@ export function startHunt(
     creatureRarity: rarity,
     creatureHp: hp,
     creatureMaxHp: hp,
-    creatureAtk: creatureAttack(playerDps, rarity),
+    creatureAtk: creatureAttack(rarity),
     phase: 'track',
     trackStep: 0,
     stamina: baseRunMods().staminaMax,
@@ -269,8 +273,11 @@ export function activeSynergies(run: HuntRunState): typeof SYNERGIES {
 export function captureChance(run: HuntRunState, petTeamBonus = 0): number {
   const mods = computeRunMods(run);
   const rarePenalty: Record<Rarity, number> = { common: 0, uncommon: -0.05, rare: -0.1, epic: -0.15, legendary: -0.2 };
+  // вид 'capture' (Хранитель святилища) ловится лучше
+  const speciesBonus = run.creature.rewardBias === 'capture' ? 0.1 : 0;
   const chance =
-    BASE_CAPTURE_CHANCE + mods.captureChance + run.extraCapture + petTeamBonus + rarePenalty[run.creatureRarity];
+    BASE_CAPTURE_CHANCE + speciesBonus + mods.captureChance + run.extraCapture + petTeamBonus +
+    rarePenalty[run.creatureRarity];
   return Math.max(0.15, Math.min(0.95, chance));
 }
 
@@ -282,23 +289,36 @@ export interface HuntRewards {
 }
 
 /** Награды за ПОБЕДУ: масштаб от силы игрока (золото ≈ 90с дохода) × редкость × бейсы существа */
+export const KEY_CHANCE_CAP = 0.95;
+
 export function victoryRewards(
   run: HuntRunState,
   playerIncomePerSec: number,
   rng: () => number = Math.random,
+  keyBonus = 0, // суммарный бонус keyChance (питомцы + артефакты), в долях
 ): HuntRewards {
   const r = run.creatureRarity;
+  const mods = computeRunMods(run); // карточки реально влияют на золото
   const goldBase = playerIncomePerSec * 90;
-  const gold = Math.floor(goldBase * run.mods.goldMult * (0.2 + CREATURE_HP_RARITY_MULT[r]));
-  let food = 2 + Math.floor(2 * CREATURE_HP_RARITY_MULT[r]);
-  let keys = rng() < 0.3 ? 1 : 0;
+  const gold = Math.floor(goldBase * mods.goldMult * (0.2 + CREATURE_HP_RARITY_MULT[r]));
+  let food = 2 + Math.floor(2 * CREATURE_HP_RARITY_MULT[r]) + run.foodFound; // найденное на шагах сохраняется
+  let keys = run.keysFound;
+  const keyChance = Math.min(KEY_CHANCE_CAP, 0.3 + keyBonus);
+  if (rng() < keyChance) keys += 1;
   switch (run.creature.rewardBias) {
     case 'food': food += 3; break;
-    case 'keys': keys += rng() < 0.4 ? 1 : 0; break;
-    case 'gold': break; // золото уже усилено
+    case 'keys':
+      if (rng() < Math.min(KEY_CHANCE_CAP, 0.4 + keyBonus)) keys += 1;
+      break;
+    case 'gold': break;
     case 'capture': food += 1; break;
   }
   return { gold, food, keys, captured: false };
+}
+
+/** Лечение вампиризмом: ровно lifesteal-доля урона (раньше ошибочно ×0.01) */
+export function lifestealHeal(dmg: number, mods: RunMods): number {
+  return dmg * mods.lifesteal;
 }
 
 /** Утешительные награды за ПОРАЖЕНИЕ (существо ушло) */

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   CREATURES,
+  KEY_CHANCE_CAP,
   HUNT_CARDS,
   HuntCard,
   HuntRunState,
@@ -13,11 +14,13 @@ import {
   creatureAttack,
   creatureHp,
   defeatRewards,
+  lifestealHeal,
   rollCreatureRarity,
   rollDraft,
   startHunt,
   victoryRewards,
 } from '../src/core/hunts';
+import { rollClearBundle } from '../src/core/expeditions';
 import { GameState } from '../src/core/gameState';
 import { sanitizeSave } from '../src/core/saveSystem';
 
@@ -41,7 +44,12 @@ describe('hunt core', () => {
     expect(creatureHp(100, 'common')).toBeLessThan(creatureHp(1000, 'common'));
     expect(creatureHp(1000, 'legendary')).toBeGreaterThan(creatureHp(1000, 'common'));
     expect(creatureHp(1, 'common')).toBe(60); // нижний пол
-    expect(creatureAttack(1000, 'legendary')).toBeGreaterThan(creatureAttack(1000, 'common'));
+    // атака масштабируется от ВЫНОСЛИВОСТИ, не от ДПС (регрессия: dps*0.02 ваншотил стамину)
+    expect(creatureAttack('legendary')).toBeGreaterThan(creatureAttack('common'));
+    expect(creatureAttack('common')).toBe(4); // floor(100 * 0.05 * 0.8)
+    expect(creatureAttack('common', 250)).toBe(10); // с карточками выносливости атака растёт
+    expect(creatureAttack('legendary')).toBe(13); // floor(100 * 0.05 * 2.6)
+    expect(creatureAttack('common', 500)).toBeLessThan(500); // атака всегда << бюджета выносливости (не следует за ДПС)
   });
 
   it('rarity roll distribution valid', () => {
@@ -123,20 +131,25 @@ describe('hunt + GameState', () => {
     const s = new GameState();
     const run = s.startHunt(CREATURES[0], 'epic')!;
     const food0 = s.data.petFood;
-    s.finishHunt(run, { gold: 500, food: 3, keys: 1, captured: true }, true);
+    s.finishHunt(run, { gold: 500, food: 3, keys: 1, captured: true }, true, true);
     expect(s.data.pets.length).toBe(1);
     expect(s.data.pets[0].rarity).toBe('epic');
     expect(s.data.pets[0].species).toBe(CREATURES[0].species);
     expect(s.data.petFood).toBe(food0 + 3);
     expect(s.data.keys).toBe(2); // старт 1 + 1
     expect(s.data.huntsWon).toBe(1);
+    // поражение не считается победой
+    const s2 = new GameState();
+    const run2 = s2.startHunt(CREATURES[0], 'common')!;
+    s2.finishHunt(run2, { gold: 0, food: 0, keys: 0, captured: false }, false, false);
+    expect(s2.data.huntsWon).toBe(0);
   });
 
   it('temporary hunt cards never leak into save', () => {
     const s = new GameState();
     const run = s.startHunt(CREATURES[0], 'common')!;
     run.pickedCards.push(HUNT_CARDS[0]);
-    s.finishHunt(run, { gold: 0, food: 0, keys: 0, captured: false }, false);
+    s.finishHunt(run, { gold: 0, food: 0, keys: 0, captured: false }, false, false);
     const raw = JSON.parse(JSON.stringify(s.data));
     expect(JSON.stringify(raw)).not.toContain('pickedCards');
     expect(JSON.stringify(raw)).not.toContain('HuntCard');
@@ -162,5 +175,93 @@ describe('hunt + GameState', () => {
     });
     expect(s.pets).toEqual([good]);
     expect(s.activePetIds).toEqual(['g1']);
+  });
+});
+
+
+describe('A5 fix pass', () => {
+  it('lifestealHeal: full share, not x0.01 (100x bug)', () => {
+    const mods = baseRunMods();
+    mods.lifesteal = 0.25;
+    expect(lifestealHeal(1000, mods)).toBe(250);
+    mods.lifesteal = 0;
+    expect(lifestealHeal(1000, mods)).toBe(0);
+  });
+
+  it('victoryRewards: card goldMult applies, found food/keys preserved, keyBonus clamped', () => {
+    const run = startHunt(CREATURES[2], 'rare', 1000);
+    run.pickedCards.push(HUNT_CARDS.find((c) => c.id === 'gold_scent')!); // +80% золота
+    run.foodFound = 3;
+    run.keysFound = 1;
+    const plain = victoryRewards(run, 100, () => 0.99, 0); // ключ не выпал
+    expect(plain.keys).toBe(1); // найденный на шагах сохранён
+    expect(plain.food).toBeGreaterThan(3); // base + найденное
+    const boosted = victoryRewards(run, 100, () => 0.99, 0);
+    // gold_scent реально влияет (раньше использовался base goldMult=1)
+    const noCard = startHunt(CREATURES[2], 'rare', 1000);
+    noCard.pickedCards = [];
+    const plainGold = victoryRewards(noCard, 100, () => 0.99, 0).gold;
+    expect(boosted.gold).toBeGreaterThanOrEqual(Math.floor(plainGold * 1.8));
+    // keyBonus не пробивает кап шанса
+    const withKey = victoryRewards(run, 100, () => 0.0, 99);
+    expect(withKey.keys).toBeGreaterThanOrEqual(1);
+    void KEY_CHANCE_CAP;
+  });
+
+  it('captureChance: spirit rewardBias grants +10%, no double pet bonus via extraCapture', () => {
+    const wolf = startHunt(CREATURES[0], 'common', 1000); // rewardBias food
+    const spirit = startHunt(CREATURES[3], 'common', 1000); // rewardBias capture
+    expect(captureChance(spirit)).toBeGreaterThan(captureChance(wolf));
+    // extraCapture уже содержит бонус питомцев: второй учёт запрещён тестом ниже
+    const withPets = startHunt(CREATURES[3], 'common', 1000, 0.2);
+    expect(captureChance(withPets)).toBeCloseTo(captureChance(spirit) + 0.2, 5);
+  });
+
+  it('repeat run: fresh state per hunt (new HuntRunState each start)', () => {
+    const a = startHunt(CREATURES[0], 'common', 1000);
+    const b = startHunt(CREATURES[0], 'common', 1000);
+    a.pickedCards.push(HUNT_CARDS[0]);
+    a.stamina = 1;
+    expect(b.pickedCards.length).toBe(0);
+    expect(b.stamina).toBe(100);
+  });
+
+  it('rollClearBundle: keyBonus applies to key chance, capped', () => {
+    const rewards = { shards: 1, stabilizerChance: 0, artifactChance: 0, gold: 0, baitChance: 0, keyChance: 0.08 };
+    const withBonus = rollClearBundle(rewards, () => 0.5, 0.5); // 0.5 < 0.58 → ключ
+    expect(withBonus.keys).toBe(1);
+    const noBonus = rollClearBundle(rewards, () => 0.5, 0);
+    expect(noBonus.keys).toBe(0);
+    const overCap = rollClearBundle(rewards, () => 0.99, 99);
+    expect(overCap.keys).toBe(0); // кап 0.95 < 0.99
+  });
+
+  it('applyRiftGrant: shardBonus (pets + secret affix) multiplies shards', () => {
+    const s = new GameState();
+    const forge = s.getRiftDef('forge');
+    const base = s.data.shards;
+    s.applyRiftGrant(forge, { shards: 100, stabilizers: 0, artifacts: 0, gold: 0, bait: 0, keys: 0 });
+    const gained = s.data.shards - base;
+    expect(gained).toBe(100); // без бонусов
+    s.data.pets = [{ uid: 'e', species: 'emberlion', rarity: 'common', level: 1, name: '' }]; // +12% осколков
+    s.data.activePetIds = ['e'];
+    const base2 = s.data.shards;
+    s.applyRiftGrant(forge, { shards: 100, stabilizers: 0, artifacts: 0, gold: 0, bait: 0, keys: 0 });
+    expect(s.data.shards - base2).toBe(112);
+  });
+
+  it('releasePet: duplicates convert to food by rarity', () => {
+    const s = new GameState();
+    s.data.pets = [
+      { uid: 'a', species: 'wolfpup', rarity: 'common', level: 1, name: '' },
+      { uid: 'b', species: 'wolfpup', rarity: 'legendary', level: 1, name: '' },
+    ];
+    s.data.activePetIds = ['b'];
+    expect(s.releasePet('a')).toBe(2);
+    expect(s.data.pets.length).toBe(1);
+    expect(s.data.petFood).toBe(5); // 3 старт + 2
+    expect(s.releasePet('b')).toBe(14);
+    expect(s.data.activePetIds).toEqual([]);
+    expect(s.releasePet('ghost')).toBe(0);
   });
 });

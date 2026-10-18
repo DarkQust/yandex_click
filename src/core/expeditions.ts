@@ -286,14 +286,22 @@ export interface ClearGrant {
 }
 
 /** Ролл бандла одной зачистки (активный автoфарм) */
-export function rollClearBundle(rewards: RoomRewards, rng: () => number): ClearGrant {
+export const GRANT_CHANCE_CAP = 0.95;
+
+/** keyBonus — суммарный бонус keyChance (питомцы+аффиксы); шансы клампятся */
+export function rollClearBundle(
+  rewards: RoomRewards,
+  rng: () => number,
+  keyBonus = 0,
+): ClearGrant {
+  const keyChance = Math.min(GRANT_CHANCE_CAP, (rewards.keyChance ?? 0) + keyBonus);
   return {
     shards: rewards.shards,
     stabilizers: rng() < rewards.stabilizerChance ? 1 : 0,
     artifacts: rng() < rewards.artifactChance ? 1 : 0,
     gold: rewards.gold,
-    bait: rng() < rewards.baitChance ? 1 : 0,
-    keys: rng() < rewards.keyChance ? 1 : 0,
+    bait: rng() < (rewards.baitChance ?? 0) ? 1 : 0,
+    keys: rng() < keyChance ? 1 : 0,
   };
 }
 

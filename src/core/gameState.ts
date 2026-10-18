@@ -123,19 +123,18 @@ export class GameState {
 
   /** Начисление бандла за полную зачистку разлома (роллы дропа) */
   private grantRiftClear(rift: RiftDef, depth: number, rng: () => number = Math.random): ClearGrant {
-    const bundle = rollClearBundle(fullClearRewards(depth, rift), rng);
+    const bundle = rollClearBundle(fullClearRewards(depth, rift), rng, this.totalKeyBonus());
     return this.applyRiftGrant(rift, bundle);
   }
 
   /** Применение aggregated-наград (общий путь для автофарма и оффлайна) */
   applyRiftGrant(rift: RiftDef, grant: ClearGrant): ClearGrant {
-    this.data.shards += grant.shards;
+    // осколки: пассив shardBonus питомцев и secret-аффикс артефактов работают вместе
+    this.data.shards += Math.round(grant.shards * this.shardBonusMult());
     this.data.stabilizers += grant.stabilizers;
     this.addGold(grant.gold);
     this.data.bait += grant.bait ?? 0;
-    // ключи: шанс усиливается keyChance-бонусами (питомцы, secret-аффикс)
-    const keyMult = 1 + (this.artifactTotals().keyChance ?? 0) / 100 + this.petKeyBonus();
-    this.data.keys += Math.round((grant.keys ?? 0) * keyMult);
+    this.data.keys += grant.keys ?? 0; // кламп шанса уже применён на уровне ролла (rollClearBundle)
     for (let i = 0; i < grant.artifacts; i++) {
       if (this.data.artifacts.length >= MAX_INVENTORY) break;
         const art = craftArtifact(Math.random, rift.modifiers.rarityBonus, rift.modifiers.secretBonus, rift.affixBias);
@@ -324,9 +323,15 @@ export class GameState {
     return (this.petTotals().captureChance ?? 0) / 100;
   }
 
-  /** Бонус команды к шансу ключа (используется рифтами/охотой) */
+  /** Бонус команды питомцев к шансу ключа */
   petKeyBonus(): number {
     return (this.petTotals().keyChance ?? 0) / 100;
+  }
+
+  /** Итоговый бонус к шансу ключа (питомцы + secret-аффикс артефактов), кап 0.95 */
+  totalKeyBonus(): number {
+    const raw = (this.artifactTotals().keyChance ?? 0) / 100 + this.petKeyBonus();
+    return Math.min(0.95, Math.max(0, raw));
   }
 
   /** Начать охоту: тратит приманку; возвращает null, если приманок нет */
@@ -337,7 +342,7 @@ export class GameState {
   }
 
   /** Завершение охоты: выдача награды и (при поимке) питомца */
-  finishHunt(run: HuntRunState, rewards: HuntRewards, captured: boolean, rng: () => number = Math.random): void {
+  finishHunt(run: HuntRunState, rewards: HuntRewards, captured: boolean, won = true, rng: () => number = Math.random): void {
     this.data.petFood += rewards.food;
     this.data.keys += rewards.keys;
     this.addGold(rewards.gold);
@@ -345,7 +350,7 @@ export class GameState {
       const pet = petFromCapture(run.creature.species, run.creatureRarity, rng);
       this.data.pets.push(pet);
     }
-    this.data.huntsWon += 1;
+    if (won) this.data.huntsWon += 1; // только победа над целью
   }
 
   /** Открыть кейс питомца за ключи */
@@ -366,6 +371,19 @@ export class GameState {
     this.data.petFood -= cost;
     pet.level += 1;
     return true;
+  }
+
+  /** Отпустить питомца: корм по редкости (повторные питомцы не мусор) */
+  releasePet(uid: string): number {
+    const i = this.data.pets.findIndex((x) => x.uid === uid);
+    if (i < 0) return 0;
+    const pet = this.data.pets[i];
+    const food: Record<string, number> = { common: 2, uncommon: 3, rare: 5, epic: 8, legendary: 14 };
+    const gained = food[pet.rarity] ?? 2;
+    this.data.pets.splice(i, 1);
+    this.data.activePetIds = this.data.activePetIds.filter((x) => x !== uid);
+    this.data.petFood += gained;
+    return gained;
   }
 
   setActivePet(uid: string, active: boolean): void {
