@@ -75,11 +75,15 @@ export class HuntScene extends Phaser.Scene {
       const x = 90 + i * 135;
       const open = unlocked.has(rank.id);
       const selected = d.huntRank === rank.id;
-      const btn = this.add.text(x, 215, rank.name, {
-        fontSize: '17px',
+      const label = open
+        ? rank.name
+        : `${rank.name}\n\u{1F512} ${rank.reqHuntsWon} побед${rank.reqSouls > 0 ? ` \u00b7 ${rank.reqSouls} ${rank.reqSouls === 1 ? 'душа' : 'душ'}` : ''}`;
+      const btn = this.add.text(x, 215, label, {
+        fontSize: '15px',
         color: open ? (selected ? '#8aff5a' : '#ffe6a0') : '#665f4d',
         backgroundColor: selected ? '#243020' : open ? '#1c2418' : '#141812',
-        padding: { x: 10, y: 6 },
+        padding: { x: 8, y: 5 },
+        align: 'center',
       }).setOrigin(0.5).setInteractive({ useHandCursor: open });
       btn.on('pointerdown', () => {
         if (!open) return;

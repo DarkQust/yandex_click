@@ -107,6 +107,15 @@ export interface Pet {
   skill?: PetSkill;
 }
 
+/** Полный whitelist характеристик питомцев (для валидации сейвов) */
+export const VALID_PET_STATS: ReadonlySet<PetStat> = new Set<PetStat>([
+  'income', 'dps', 'click', 'dungeonGold', 'shardBonus', 'keyChance', 'captureChance',
+  'tierJump', 'extraSpawn', 'spawnDiscount', 'ultraCritChance', 'ultraCritMult', 'offlineRate',
+]);
+
+/** Верхняя граница значения одного модификатора (защита от читерских сейвов) */
+export const PET_MOD_VALUE_CAP = 10000;
+
 export const MAX_ACTIVE_PETS = 3;
 export const MAX_PET_LEVEL = 10;
 

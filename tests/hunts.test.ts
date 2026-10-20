@@ -327,3 +327,42 @@ describe('A5.1 hunt ranks', () => {
     expect(run.rank.id).toBe(4);
   });
 });
+
+
+describe('A5.1-fix: rank validation & consistency', () => {
+  it('selectHuntRank rejects invalid ids even with full progress', () => {
+    const s = new GameState();
+    s.data.huntsWon = 100;
+    s.data.souls = 99; // всё открыто
+    expect(s.unlockedHuntRanks()).toEqual([0, 1, 2, 3, 4]);
+    expect(s.selectHuntRank(99)).toBe(false); // вне диапазона — раньше молча выбирал V
+    expect(s.selectHuntRank(4.5)).toBe(false); // дробный
+    expect(s.selectHuntRank(-1)).toBe(false);
+    expect(s.selectHuntRank(Number.NaN)).toBe(false);
+    expect(s.selectHuntRank(4)).toBe(true); // валидный максимум
+    expect(s.data.huntRank).toBe(4);
+  });
+
+  it('ensureHuntRankAvailable downgrades stale rank when progress drops', () => {
+    const s = new GameState();
+    s.data.huntsWon = 10;
+    s.data.souls = 1;
+    expect(s.selectHuntRank(2)).toBe(true);
+    // прогресс «откатился»: души потрачены (будущий ресурс) — ранг III закрылся
+    s.data.souls = 0;
+    expect(s.ensureHuntRankAvailable()).toBe(1); // понижение до II
+    expect(s.data.huntRank).toBe(1);
+    // охота стартует с пониженным рангом, не с залепленным закрытым
+    const run = s.startHunt(CREATURES[0], seq([0.01]))!;
+    expect(run.rank.id).toBe(1);
+  });
+
+  it('startHunt keeps saved rank when still unlocked', () => {
+    const s = new GameState();
+    s.data.huntsWon = 10;
+    s.data.souls = 1;
+    s.selectHuntRank(2);
+    const run = s.startHunt(CREATURES[0], seq([0.01]))!;
+    expect(run.rank.id).toBe(2); // без отклонений — ранг сохранён
+  });
+});

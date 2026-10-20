@@ -21,6 +21,12 @@ import {
   stableRng,
 } from '../src/core/pets';
 import { GameState } from '../src/core/gameState';
+import { sanitizeSave } from '../src/core/saveSystem';
+import type { PetStat } from '../src/core/pets';
+const PET_STATS: PetStat[] = [
+  'income', 'dps', 'click', 'dungeonGold', 'shardBonus', 'keyChance', 'captureChance',
+  'tierJump', 'extraSpawn', 'spawnDiscount', 'ultraCritChance', 'ultraCritMult', 'offlineRate',
+];
 
 const seq = (values: number[]) => {
   let i = 0;
@@ -202,5 +208,74 @@ describe('pets + GameState aggregates (A5.1)', () => {
     s.data.pets = [pet];
     s.data.activePetIds = [pet.uid];
     expect(s.offlineEfficiency()).toBeCloseTo(0.5 * 1.5, 5);
+  });
+});
+
+
+describe('A5.1-fix: save hardening', () => {
+
+  it('sanitize drops invalid mods (unknown stat, negative, over-cap) and resynthesizes by count', () => {
+    const raw = {
+      pets: [
+        {
+          uid: 'x1', species: 'wolfpup', rarity: 'epic', level: 1, name: '',
+          mods: [
+            { stat: 'hacked_stat', value: 50 },   // неизвестный стат → вылет
+            { stat: 'dps', value: -10 },           // отрицательное → вылет
+            { stat: 'income', value: 999999 },     // выше капа → вылет
+            { stat: 'click', value: 15 },          // валидный
+          ],
+          // 1 валидный из 4 для epic → количество не совпало → полный пересинтез
+        },
+      ],
+    };
+    const s = sanitizeSave(raw);
+    const pet = s.pets[0];
+    expect(pet.mods.length).toBe(PET_MOD_COUNT.epic);
+    expect(pet.mods.every((m) => PET_STATS.includes(m.stat))).toBe(true);
+    expect(pet.mods[0].stat).toBe('dps'); // первичка вида сохраняется при пересинтезе
+  });
+
+  it('valid mods of exact count are kept as-is', () => {
+    const mods = [
+      { stat: 'dps', value: 12.5 },
+      { stat: 'ultraCritChance', value: 3.1 },
+    ];
+    const s = sanitizeSave({
+      pets: [{ uid: 'keep', species: 'wolfpup', rarity: 'common', level: 1, name: '', mods }],
+    });
+    expect(s.pets[0].mods).toEqual(mods);
+  });
+
+  it('skill normalized: wrong id resets, stars clamped 1..5, stripped from low rarity', () => {
+    const s = sanitizeSave({
+      pets: [
+        // легендарка: чужой id + звёзды 99 → id вида, звёзды 1
+        { uid: 'a', species: 'phoenix', rarity: 'legendary', level: 1, name: '', mods: [],
+          skill: { id: 'wrong_skill', stars: 99 } },
+        // легендарка: верный id, звёзды NaN → 1
+        { uid: 'b', species: 'wolfpup', rarity: 'legendary', level: 1, name: '', mods: [],
+          skill: { id: 'pack_leader', stars: Number.NaN } },
+        // легендарка: верный id, звёзды 3 → сохранены
+        { uid: 'c', species: 'drakeling', rarity: 'legendary', level: 1, name: '', mods: [],
+          skill: { id: 'hoard', stars: 3 } },
+        // common: скилл подложен → удалён
+        { uid: 'd', species: 'spirit', rarity: 'common', level: 1, name: '', mods: [],
+          skill: { id: 'radiance', stars: 5 } },
+      ],
+    });
+    expect(s.pets[0].skill).toEqual({ id: 'rebirth', stars: 1 });
+    expect(s.pets[1].skill).toEqual({ id: 'pack_leader', stars: 1 });
+    expect(s.pets[2].skill).toEqual({ id: 'hoard', stars: 3 });
+    expect(s.pets[3].skill).toBeUndefined();
+  });
+
+  it('legacy save without mods/skill: deterministic synth, epic gets skill stars=1', () => {
+    const raw = { pets: [{ uid: 'legacy1', species: 'golem', rarity: 'epic', level: 2, name: 'Г' }] };
+    const s1 = sanitizeSave(raw);
+    const s2 = sanitizeSave(raw);
+    expect(s1.pets[0].mods).toEqual(s2.pets[0].mods); // детерминированно
+    expect(s1.pets[0].mods.length).toBe(PET_MOD_COUNT.epic);
+    expect(s1.pets[0].skill).toEqual({ id: 'living_anvil', stars: 1 });
   });
 });

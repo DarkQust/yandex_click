@@ -377,19 +377,40 @@ export class GameState {
     return HUNT_RANKS.filter((r) => isRankUnlocked(r, this.data.huntsWon, this.data.souls)).map((r) => r.id);
   }
 
-  /** Выбор ранга охоты (только если открыт) */
+  /**
+   * Выбор ранга охоты. Валидируем ИСХОДНЫЙ ID до клампа:
+   * нецелые, отрицательные и вне диапазона значения отклоняются,
+   * даже если прогресс открывает ранг V (иначе 99 молча выбирал бы V).
+   */
   selectHuntRank(rankId: number): boolean {
+    if (!Number.isInteger(rankId) || rankId < 0 || rankId >= HUNT_RANKS.length) return false;
     const rank = getHuntRank(rankId);
     if (!isRankUnlocked(rank, this.data.huntsWon, this.data.souls)) return false;
     this.data.huntRank = rank.id;
     return true;
   }
 
+  /**
+   * Согласованность: выбранный ранг не должен «залипать» закрытым,
+   * если прогресс откатился (например, души станут тратящимся ресурсом).
+   * Понижаем до максимального доступного и фиксируем в сейве.
+   */
+  ensureHuntRankAvailable(): number {
+    const current = getHuntRank(this.data.huntRank);
+    if (isRankUnlocked(current, this.data.huntsWon, this.data.souls)) return current.id;
+    let best = 0;
+    for (const r of HUNT_RANKS) {
+      if (isRankUnlocked(r, this.data.huntsWon, this.data.souls)) best = r.id;
+    }
+    this.data.huntRank = best;
+    return best;
+  }
+
   /** Начать охоту выбранного ранга: тратит приманку, роллит редкость с бустом ранга */
   startHunt(creature: CreatureDef, rng: () => number = Math.random): HuntRunState | null {
     if (this.data.bait < 1) return null;
     this.data.bait -= 1;
-    const rank = getHuntRank(this.data.huntRank);
+    const rank = getHuntRank(this.ensureHuntRankAvailable());
     const rarity = rollCreatureRarity(rng, rank.rarityBoost);
     return startHunt(creature, rarity, this.totalDps(), this.petCaptureBonus(), rng, rank.id);
   }

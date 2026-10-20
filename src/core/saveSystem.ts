@@ -6,8 +6,8 @@ import { Weapon } from './economy';
 import { Artifact, AFFIX_POOL, MAX_EQUIPPED, RARITIES } from './artifacts';
 import { RiftProgress, defaultRiftProgress, RIFTS, RiftId } from './expeditions';
 import {
-  Pet, PetSpeciesId, PetMod, MAX_ACTIVE_PETS, PET_SPECIES, PET_SKILLS, PET_SKILL_MIN_RARITY,
-  genPetMods, stableRng,
+  Pet, PetSpeciesId, PetMod, MAX_ACTIVE_PETS, MAX_SKILL_STARS, PET_MOD_COUNT, PET_MOD_VALUE_CAP,
+  PET_SPECIES, PET_SKILLS, PET_SKILL_MIN_RARITY, VALID_PET_STATS, genPetMods, stableRng,
 } from './pets';
 
 
@@ -124,22 +124,32 @@ function sanitizePets(raw: unknown): Pet[] {
     if (typeof p.rarity !== 'string' || !RARITIES.includes(p.rarity)) continue;
     const rarity = p.rarity;
     const species = p.species as PetSpeciesId;
-    // миграция старых питомцев: модификаторы синтезируются детерминированно из uid
+    // модификаторы: строгая валидация — whitelist статов, положительное значение с капом;
+    // при несоответствии количества редкости — детерминированный пересинтез из uid
     let mods: PetMod[] = [];
-    if (Array.isArray(p.mods) && p.mods.length > 0) {
+    if (Array.isArray(p.mods)) {
       mods = p.mods.filter(
         (m): m is PetMod =>
-          !!m && typeof m === 'object' && typeof (m as { stat?: string }).stat === 'string' &&
-          Number.isFinite((m as { value?: number }).value),
+          !!m && typeof m === 'object' &&
+          typeof (m as { stat?: string }).stat === 'string' &&
+          VALID_PET_STATS.has((m as { stat?: string }).stat as PetMod['stat']) &&
+          Number.isFinite((m as { value?: number }).value) &&
+          (m as { value: number }).value > 0 &&
+          (m as { value: number }).value <= PET_MOD_VALUE_CAP,
       );
     }
-    if (mods.length === 0) {
-      mods = genPetMods(species, rarity, stableRng(p.uid));
+    if (mods.length !== PET_MOD_COUNT[rarity]) {
+      mods = genPetMods(species, rarity, stableRng(p.uid)); // легаси-миграция и битые сейвы
     }
-    // уникальный пассив для топ-редкостей (stars=1 до A5.2)
+    // уникальный пассив: только топ-редкости, ID нормализуется к виду, звёзды 1..5 (int)
     let skill = p.skill;
-    if (PET_SKILL_MIN_RARITY.includes(rarity) && (!skill || typeof skill.id !== 'string')) {
+    if (!PET_SKILL_MIN_RARITY.includes(rarity)) {
+      skill = undefined; // у common..rare пассива нет
+    } else if (!skill || typeof skill.id !== 'string') {
       skill = { id: PET_SKILLS[species].id, stars: 1 };
+    } else {
+      const stars = Math.max(1, Math.min(MAX_SKILL_STARS, safeNonNegInt(skill.stars, 1) || 1));
+      skill = { id: PET_SKILLS[species].id, stars: skill.id === PET_SKILLS[species].id ? stars : 1 };
     }
     out.push({
       uid: p.uid,
