@@ -2,6 +2,7 @@ import Phaser from 'phaser';
 import {
   CREATURES,
   CreatureDef,
+  HUNT_RANKS,
   HuntCard,
   HuntRunState,
   TRACK_STEPS,
@@ -11,7 +12,6 @@ import {
   computeRunMods,
   defeatRewards,
   lifestealHeal,
-  rollCreatureRarity,
   rollDraft,
   victoryRewards,
 } from '../core/hunts';
@@ -69,6 +69,26 @@ export class HuntScene extends Phaser.Scene {
     this.add.text(360, 165, `🎣 Приманки: ${d.bait}   🗝 Ключи: ${d.keys}   🍖 Корм: ${d.petFood}   Побед: ${d.huntsWon}`,
       { fontSize: '22px', color: '#9adcff' }).setOrigin(0.5);
 
+    // выбор ранга охоты: риск/награды/редкости растут вместе с рангом
+    const unlocked = new Set(this.state.unlockedHuntRanks());
+    HUNT_RANKS.forEach((rank, i) => {
+      const x = 90 + i * 135;
+      const open = unlocked.has(rank.id);
+      const selected = d.huntRank === rank.id;
+      const btn = this.add.text(x, 215, rank.name, {
+        fontSize: '17px',
+        color: open ? (selected ? '#8aff5a' : '#ffe6a0') : '#665f4d',
+        backgroundColor: selected ? '#243020' : open ? '#1c2418' : '#141812',
+        padding: { x: 10, y: 6 },
+      }).setOrigin(0.5).setInteractive({ useHandCursor: open });
+      btn.on('pointerdown', () => {
+        if (!open) return;
+        this.state.selectHuntRank(rank.id);
+        this.state.save();
+        this.showSelect();
+      });
+    });
+
     CREATURES.forEach((c, i) => {
       const y = 290 + i * 200;
       const box = this.add.rectangle(360, y, 620, 170, 0x14231a).setStrokeStyle(2, 0x3a6b4a);
@@ -95,8 +115,7 @@ export class HuntScene extends Phaser.Scene {
 
   private beginHunt(creature: CreatureDef): void {
     if (this.busy) return;
-    const rarity = rollCreatureRarity(Math.random);
-    const run = this.state.startHunt(creature, rarity);
+    const run = this.state.startHunt(creature); // ранг и редкость роллятся в GameState
     if (!run) return; // нет приманок
     this.run = run;
     this.runRef = run;
@@ -105,8 +124,9 @@ export class HuntScene extends Phaser.Scene {
     this.children.removeAll(true);
     this.add.rectangle(360, 640, 720, 1280, 0x0c1a12).setAlpha(0.98).setInteractive();
 
+    const rarity = run.creatureRarity;
     this.add.text(360, 50,
-      `${creature.icon} ${creature.name} [${RARITY_INFO[rarity].ru}]`,
+      `${creature.icon} ${creature.name} [${RARITY_INFO[rarity].ru}] — ранг ${run.rank.name}`,
       { fontSize: '30px', color: '#' + CARD_COLORS[rarity].toString(16) }).setOrigin(0.5);
     this.statusText = this.add.text(360, 120, '', { fontSize: '22px', color: '#ffe6a0', align: 'center', wordWrap: { width: 660 } }).setOrigin(0.5);
     this.hint2Text = this.add.text(360, 170, '', { fontSize: '17px', color: '#9ab8a8' }).setOrigin(0.5);
@@ -257,6 +277,7 @@ export class HuntScene extends Phaser.Scene {
       const mods = computeRunMods(run);
       let dmg = this.state.clickDamage() * mods.clickMult * mods.dmgMult;
       if (Math.random() < mods.critChance) dmg *= 3;
+      if (Math.random() < this.state.ultraCritChance()) dmg *= this.state.ultraCritMult(); // ультра поверх крита
       run.creatureHp -= dmg;
       this.applyLifesteal(run, dmg);
       sprite.x = 360 + Phaser.Math.Between(-4, 4);

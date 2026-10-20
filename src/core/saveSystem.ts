@@ -5,7 +5,10 @@ import { GRID_SIZE } from './config';
 import { Weapon } from './economy';
 import { Artifact, AFFIX_POOL, MAX_EQUIPPED, RARITIES } from './artifacts';
 import { RiftProgress, defaultRiftProgress, RIFTS, RiftId } from './expeditions';
-import { Pet, PetSpeciesId, MAX_ACTIVE_PETS, PET_SPECIES } from './pets';
+import {
+  Pet, PetSpeciesId, PetMod, MAX_ACTIVE_PETS, PET_SPECIES, PET_SKILLS, PET_SKILL_MIN_RARITY,
+  genPetMods, stableRng,
+} from './pets';
 
 
 export interface SaveData {
@@ -35,6 +38,7 @@ export interface SaveData {
   bait: number; // приманки для охоты
   petFood: number; // корм для прокачки
   huntsWon: number;
+  huntRank: number; // выбранный ранг охоты (0..4)
   lastSeen: number;
 }
 
@@ -66,6 +70,7 @@ export function createDefaultSave(): SaveData {
     bait: 2, // стартовые: первые охоты
     petFood: 3,
     huntsWon: 0,
+    huntRank: 0,
     lastSeen: Date.now(),
   };
 }
@@ -117,12 +122,33 @@ function sanitizePets(raw: unknown): Pet[] {
     if (typeof p.uid !== 'string' || p.uid.length === 0) continue;
     if (typeof p.species !== 'string' || !speciesIds.has(p.species as PetSpeciesId)) continue;
     if (typeof p.rarity !== 'string' || !RARITIES.includes(p.rarity)) continue;
+    const rarity = p.rarity;
+    const species = p.species as PetSpeciesId;
+    // миграция старых питомцев: модификаторы синтезируются детерминированно из uid
+    let mods: PetMod[] = [];
+    if (Array.isArray(p.mods) && p.mods.length > 0) {
+      mods = p.mods.filter(
+        (m): m is PetMod =>
+          !!m && typeof m === 'object' && typeof (m as { stat?: string }).stat === 'string' &&
+          Number.isFinite((m as { value?: number }).value),
+      );
+    }
+    if (mods.length === 0) {
+      mods = genPetMods(species, rarity, stableRng(p.uid));
+    }
+    // уникальный пассив для топ-редкостей (stars=1 до A5.2)
+    let skill = p.skill;
+    if (PET_SKILL_MIN_RARITY.includes(rarity) && (!skill || typeof skill.id !== 'string')) {
+      skill = { id: PET_SKILLS[species].id, stars: 1 };
+    }
     out.push({
       uid: p.uid,
-      species: p.species as PetSpeciesId,
-      rarity: p.rarity,
+      species,
+      rarity,
       level: Math.max(1, Math.min(10, safeNonNegInt(p.level, 1) || 1)),
       name: typeof p.name === 'string' ? p.name : '',
+      mods,
+      skill,
     });
   }
   return out;
@@ -147,6 +173,7 @@ export function sanitizeSave(raw: unknown): SaveData {
     bait: safeNonNegInt(r.bait, 2),
     petFood: safeNonNegInt(r.petFood, 3),
     huntsWon: safeNonNegInt(r.huntsWon, 0),
+    huntRank: Math.max(0, Math.min(4, safeNonNegInt(r.huntRank, 0))),
     stabilizers: Number.isFinite(r.stabilizers) ? (r.stabilizers as number) : 2,
     artifacts: sanitizeArtifacts(r.artifacts),
     grid,

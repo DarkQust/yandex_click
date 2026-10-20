@@ -1,7 +1,10 @@
 /**
  * Центральное состояние игры — единственный источник правды для сцен.
  */
-import { CLICK_DAMAGE_RATIO, CRIT_BASE_MULT, CRIT_CHANCE_CAP, DOUBLE_INCOME_SECONDS, LUCKY_MERGE_CAP, OFFLINE_CAP_SECONDS } from './config';
+import {
+  CLICK_DAMAGE_RATIO, CRIT_BASE_MULT, CRIT_CHANCE_CAP, DOUBLE_INCOME_SECONDS,
+  LUCKY_MERGE_CAP, OFFLINE_CAP_SECONDS, ULTRA_CRIT_CHANCE_CAP, ULTRA_CRIT_BASE_MULT,
+} from './config';
 import {
   Weapon,
   randomBranch,
@@ -15,7 +18,6 @@ import { computeSkillEffects, SkillEffects } from './skills';
 import {
   Artifact,
   CRAFT_COST_SHARDS,
-  Rarity,
   MAX_EQUIPPED,
   MAX_INVENTORY,
   RARITY_INFO,
@@ -36,7 +38,10 @@ import {
   rollClearBundle,
   tickAutoFarm,
 } from './expeditions';
-import { CreatureDef, HuntRewards, HuntRunState, startHunt } from './hunts';
+import {
+  CreatureDef, HuntRewards, HuntRunState, HUNT_RANKS, getHuntRank, isRankUnlocked,
+  rollCreatureRarity, startHunt,
+} from './hunts';
 
 import {
   CASE_COST_KEYS,
@@ -229,9 +234,7 @@ export class GameState {
   }
 
   spawnCostNow(): number {
-    const artDisc = (this.artifactTotals().spawnDiscount ?? 0) / 100;
-    const totalDisc = Math.min(0.6, this.effects.spawnDiscount + artDisc);
-    return Math.floor(spawnCost(this.data.spawnCount) * (1 - totalDisc));
+    return Math.floor(spawnCost(this.data.spawnCount) * (1 - this.forgeSpawnDiscount()));
   }
 
   /** Начисление золота с учётом lifetime-статистики */
@@ -267,9 +270,10 @@ export class GameState {
 
   /** Эффективность оффлайн-дохода: навык (50%/100%) и аффикс offlineRate независимы */
   offlineEfficiency(): number {
-    const tot = this.artifactTotals();
+    const art = (this.artifactTotals().offlineRate ?? 0) / 100;
+    const pet = (this.petTotals().offlineRate ?? 0) / 100;
     const base = this.effects.offlineFullRate ? 1 : 0.5;
-    return base * (1 + (tot.offlineRate ?? 0) / 100);
+    return base * (1 + art) * (1 + pet);
   }
 
   /** Кап оффлайн-дохода в секундах: базовый 8ч + аффикс offlineCap (часы) */
@@ -334,11 +338,60 @@ export class GameState {
     return Math.min(0.95, Math.max(0, raw));
   }
 
-  /** Начать охоту: тратит приманку; возвращает null, если приманок нет */
-  startHunt(creature: CreatureDef, rarity: Rarity, rng: () => number = Math.random): HuntRunState | null {
+  // ---------- Модификаторы кузницы и ультра-крит (питомцы/скиллы) ----------
+
+  /** Шанс спавна оружия тиром выше (кап 50%) */
+  forgeTierJumpChance(): number {
+    const raw = (this.petTotals().tierJump ?? 0) / 100;
+    return Math.min(0.5, Math.max(0, raw));
+  }
+
+  /** Шанс дополнительной генерации оружия при ковке: навык + питомцы (кап 75%) */
+  forgeExtraSpawnChance(): number {
+    const raw = this.effects.doubleSpawnChance + (this.petTotals().extraSpawn ?? 0) / 100;
+    return Math.min(0.75, Math.max(0, raw));
+  }
+
+  /** Итоговая скидка на ковку: навыки + артефакты + питомцы (кап 60%) */
+  forgeSpawnDiscount(): number {
+    const raw =
+      this.effects.spawnDiscount +
+      (this.artifactTotals().spawnDiscount ?? 0) / 100 +
+      (this.petTotals().spawnDiscount ?? 0) / 100;
+    return Math.min(0.6, Math.max(0, raw));
+  }
+
+  /** Шанс ультра-крита поверх обычного (кап 50%) */
+  ultraCritChance(): number {
+    const raw = (this.petTotals().ultraCritChance ?? 0) / 100;
+    return Math.min(ULTRA_CRIT_CHANCE_CAP, Math.max(0, raw));
+  }
+
+  /** Множитель ультра-крита (база 5, усиливается ultraCritMult) */
+  ultraCritMult(): number {
+    return ULTRA_CRIT_BASE_MULT * (1 + (this.petTotals().ultraCritMult ?? 0) / 100);
+  }
+
+  /** Доступные ранги по прогрессу (победы в охотах + души) */
+  unlockedHuntRanks(): number[] {
+    return HUNT_RANKS.filter((r) => isRankUnlocked(r, this.data.huntsWon, this.data.souls)).map((r) => r.id);
+  }
+
+  /** Выбор ранга охоты (только если открыт) */
+  selectHuntRank(rankId: number): boolean {
+    const rank = getHuntRank(rankId);
+    if (!isRankUnlocked(rank, this.data.huntsWon, this.data.souls)) return false;
+    this.data.huntRank = rank.id;
+    return true;
+  }
+
+  /** Начать охоту выбранного ранга: тратит приманку, роллит редкость с бустом ранга */
+  startHunt(creature: CreatureDef, rng: () => number = Math.random): HuntRunState | null {
     if (this.data.bait < 1) return null;
     this.data.bait -= 1;
-    return startHunt(creature, rarity, this.totalDps(), this.petCaptureBonus(), rng);
+    const rank = getHuntRank(this.data.huntRank);
+    const rarity = rollCreatureRarity(rng, rank.rarityBoost);
+    return startHunt(creature, rarity, this.totalDps(), this.petCaptureBonus(), rng, rank.id);
   }
 
   /** Завершение охоты: выдача награды и (при поимке) питомца */

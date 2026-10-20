@@ -1,5 +1,5 @@
 import Phaser from 'phaser';
-import { GRID_COLS, GRID_SIZE, LUCKY_MERGE_BASE_CHANCE } from '../core/config';
+import { GRID_COLS, GRID_SIZE, LUCKY_MERGE_BASE_CHANCE, MAX_TIER } from '../core/config';
 import {
   Weapon,
   canMerge,
@@ -155,12 +155,20 @@ export class ForgeScene extends Phaser.Scene {
     }
     let tier = 1;
     if (Math.random() < this.state.effects.tier2SpawnChance) tier = 2;
+    // тир-прыжок от питомцев/скиллов: оружие ковается тиром выше (кап MAX_TIER)
+    if (Math.random() < this.state.forgeTierJumpChance() && tier < MAX_TIER) tier += 1;
     this.state.data.grid[slot] = { branch: randomBranch(), tier };
     this.state.gridVersion++;
 
-    if (Math.random() < this.state.effects.doubleSpawnChance) {
+    // дополнительная генерация: навык «Щедрый очаг» + модификаторы питомцев
+    if (Math.random() < this.state.forgeExtraSpawnChance()) {
       const extra = firstEmptySlot(this.state.data.grid);
-      if (extra >= 0) this.state.data.grid[extra] = { branch: randomBranch(), tier: 1 };
+      if (extra >= 0) {
+        let extraTier = 1;
+        if (Math.random() < this.state.forgeTierJumpChance() && extraTier < MAX_TIER) extraTier += 1;
+        this.state.data.grid[extra] = { branch: randomBranch(), tier: extraTier };
+        this.state.gridVersion++;
+      }
     }
     this.renderAllWeapons();
     this.refreshHud();

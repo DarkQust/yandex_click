@@ -34,12 +34,55 @@ export const CREATURE_RARITY_WEIGHTS: Record<Rarity, number> = {
   legendary: 3,
 };
 
-export function rollCreatureRarity(rng: () => number): Rarity {
-  const entries = Object.entries(CREATURE_RARITY_WEIGHTS) as [Rarity, number][];
-  const total = entries.reduce((s, [, w]) => s + w, 0);
+/**
+ * Ранги охоты: игрок выбирает доступную сложность.
+ * Ранг влияет на риск (riskMult к HP/атаке), ценность наград (rewardMult),
+ * доступность редкостей (rarityBoost) и плоский бонус к поимке.
+ * Открытие — по прогрессу основной игры: победы в охотах + души престижа.
+ */
+export interface HuntRankDef {
+  id: number;
+  name: string;
+  reqHuntsWon: number;
+  reqSouls: number;
+  rarityBoost: number; // сдвиг весов редкости (0..1)
+  rewardMult: number;
+  riskMult: number;
+  captureBonus: number; // + к шансу поимки
+}
+
+export const HUNT_RANKS: HuntRankDef[] = [
+  { id: 0, name: 'I Тропа', reqHuntsWon: 0, reqSouls: 0, rarityBoost: 0, rewardMult: 1, riskMult: 1, captureBonus: 0.05 },
+  { id: 1, name: 'II След', reqHuntsWon: 3, reqSouls: 0, rarityBoost: 0.1, rewardMult: 1.25, riskMult: 1.15, captureBonus: 0.03 },
+  { id: 2, name: 'III Гон', reqHuntsWon: 10, reqSouls: 1, rarityBoost: 0.2, rewardMult: 1.6, riskMult: 1.35, captureBonus: 0 },
+  { id: 3, name: 'IV Погоня', reqHuntsWon: 25, reqSouls: 3, rarityBoost: 0.35, rewardMult: 2.2, riskMult: 1.6, captureBonus: -0.05 },
+  { id: 4, name: 'V Кровавый след', reqHuntsWon: 50, reqSouls: 8, rarityBoost: 0.55, rewardMult: 3, riskMult: 2, captureBonus: -0.1 },
+];
+
+export function getHuntRank(id: number): HuntRankDef {
+  return HUNT_RANKS[Math.max(0, Math.min(HUNT_RANKS.length - 1, Math.floor(id)))];
+}
+
+/** Доступен ли ранг при данном прогрессе */
+export function isRankUnlocked(rank: HuntRankDef, huntsWon: number, souls: number): boolean {
+  return huntsWon >= rank.reqHuntsWon && souls >= rank.reqSouls;
+}
+
+/** Ролл редкости с бустом ранга (сдвиг весов в сторону редких) */
+export function rollCreatureRarity(rng: () => number, rarityBoost = 0): Rarity {
+  const boost = Math.min(1, Math.max(0, rarityBoost));
+  const w = { ...CREATURE_RARITY_WEIGHTS };
+  if (boost > 0) {
+    w.common = 45 * (1 - boost);
+    w.rare = 16 * (1 + boost);
+    w.epic = 8 * (1 + boost * 2);
+    w.legendary = 3 * (1 + boost * 3);
+  }
+  const entries = Object.entries(w) as [Rarity, number][];
+  const total = entries.reduce((sum, [, x]) => sum + x, 0);
   let roll = rng() * total;
-  for (const [r, w] of entries) {
-    roll -= w;
+  for (const [r, x] of entries) {
+    roll -= x;
     if (roll <= 0) return r;
   }
   return 'common';
@@ -205,6 +248,7 @@ export type HuntPhase = 'track' | 'elite' | 'final' | 'won' | 'lost';
 export interface HuntRunState {
   creature: CreatureDef;
   creatureRarity: Rarity;
+  rank: HuntRankDef; // выбранный ранг охоты
   creatureHp: number;
   creatureMaxHp: number;
   creatureAtk: number;
@@ -230,15 +274,18 @@ export function startHunt(
   playerDps: number,
   extraCapture = 0,
   rng: () => number = Math.random,
+  rankId = 0,
 ): HuntRunState {
   void rng;
-  const hp = creatureHp(playerDps, rarity);
+  const rank = getHuntRank(rankId);
+  const hp = Math.floor(creatureHp(playerDps, rarity) * rank.riskMult);
   return {
     creature,
     creatureRarity: rarity,
+    rank,
     creatureHp: hp,
     creatureMaxHp: hp,
-    creatureAtk: creatureAttack(rarity),
+    creatureAtk: Math.floor(creatureAttack(rarity) * rank.riskMult),
     phase: 'track',
     trackStep: 0,
     stamina: baseRunMods().staminaMax,
@@ -276,8 +323,8 @@ export function captureChance(run: HuntRunState, petTeamBonus = 0): number {
   // вид 'capture' (Хранитель святилища) ловится лучше
   const speciesBonus = run.creature.rewardBias === 'capture' ? 0.1 : 0;
   const chance =
-    BASE_CAPTURE_CHANCE + speciesBonus + mods.captureChance + run.extraCapture + petTeamBonus +
-    rarePenalty[run.creatureRarity];
+    BASE_CAPTURE_CHANCE + speciesBonus + run.rank.captureBonus + mods.captureChance + run.extraCapture +
+    petTeamBonus + rarePenalty[run.creatureRarity];
   return Math.max(0.15, Math.min(0.95, chance));
 }
 
@@ -300,8 +347,9 @@ export function victoryRewards(
   const r = run.creatureRarity;
   const mods = computeRunMods(run); // карточки реально влияют на золото
   const goldBase = playerIncomePerSec * 90;
-  const gold = Math.floor(goldBase * mods.goldMult * (0.2 + CREATURE_HP_RARITY_MULT[r]));
-  let food = 2 + Math.floor(2 * CREATURE_HP_RARITY_MULT[r]) + run.foodFound; // найденное на шагах сохраняется
+  const gold = Math.floor(goldBase * mods.goldMult * run.rank.rewardMult * (0.2 + CREATURE_HP_RARITY_MULT[r]));
+  let food =
+    2 + Math.floor((2 + run.foodFound) * run.rank.rewardMult); // найденное на шагах сохраняется, ранг усиливает
   let keys = run.keysFound;
   const keyChance = Math.min(KEY_CHANCE_CAP, 0.3 + keyBonus);
   if (rng() < keyChance) keys += 1;

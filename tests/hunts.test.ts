@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
   CREATURES,
+  HUNT_RANKS,
+  isRankUnlocked,
   KEY_CHANCE_CAP,
   HUNT_CARDS,
   HuntCard,
@@ -89,7 +91,7 @@ describe('hunt core', () => {
 
   it('capture chance: base + cards + pets, rarity penalty, clamped', () => {
     const plain = startHunt(CREATURES[0], 'common', 1000);
-    expect(captureChance(plain, 0)).toBeCloseTo(0.4);
+    expect(captureChance(plain, 0)).toBeCloseTo(0.4 + HUNT_RANKS[0].captureBonus); // база + бонус ранга I
     const trapper = runWith(['trapmaster', 'golden_cage']);
     expect(captureChance(trapper, 0.1)).toBeGreaterThan(0.9);
     expect(captureChance(trapper, 0.1)).toBeLessThanOrEqual(0.95); // кап
@@ -114,22 +116,23 @@ describe('hunt + GameState', () => {
   it('startHunt spends bait, respects pets capture bonus', () => {
     const s = new GameState();
     expect(s.data.bait).toBe(2);
-    const run = s.startHunt(CREATURES[0], 'common')!;
+    const run = s.startHunt(CREATURES[0], seq([0.01]))!;
     expect(run).toBeTruthy();
     expect(s.data.bait).toBe(1);
     expect(run.extraCapture).toBe(0);
+    expect(run.creatureRarity).toBe('common'); // seq([0.01]) при ранге I
     s.data.pets.push({
-      uid: 'p1', species: 'spirit', rarity: 'common', level: 1, name: 'Дух',
+      uid: 'p1', species: 'spirit', rarity: 'common', level: 1, name: 'Дух', mods: [],
     });
     s.data.activePetIds = ['p1'];
-    const run2 = s.startHunt(CREATURES[0], 'common')!;
+    const run2 = s.startHunt(CREATURES[0], seq([0.01]))!;
     expect(run2.extraCapture).toBeGreaterThan(0); // captureChance-питомец даёт бонус
-    expect(s.startHunt(CREATURES[0], 'common')).toBeNull(); // приманки кончились
+    expect(s.startHunt(CREATURES[0], seq([0.01]))).toBeNull(); // приманки кончились
   });
 
   it('finishHunt with capture grants pet; food/keys accumulate', () => {
     const s = new GameState();
-    const run = s.startHunt(CREATURES[0], 'epic')!;
+    const run = s.startHunt(CREATURES[0], seq([0.95]))!; // эпик при ранге 0
     const food0 = s.data.petFood;
     s.finishHunt(run, { gold: 500, food: 3, keys: 1, captured: true }, true, true);
     expect(s.data.pets.length).toBe(1);
@@ -140,14 +143,14 @@ describe('hunt + GameState', () => {
     expect(s.data.huntsWon).toBe(1);
     // поражение не считается победой
     const s2 = new GameState();
-    const run2 = s2.startHunt(CREATURES[0], 'common')!;
+    const run2 = s2.startHunt(CREATURES[0], seq([0.01]))!;
     s2.finishHunt(run2, { gold: 0, food: 0, keys: 0, captured: false }, false, false);
     expect(s2.data.huntsWon).toBe(0);
   });
 
   it('temporary hunt cards never leak into save', () => {
     const s = new GameState();
-    const run = s.startHunt(CREATURES[0], 'common')!;
+    const run = s.startHunt(CREATURES[0], seq([0.01]))!;
     run.pickedCards.push(HUNT_CARDS[0]);
     s.finishHunt(run, { gold: 0, food: 0, keys: 0, captured: false }, false, false);
     const raw = JSON.parse(JSON.stringify(s.data));
@@ -173,7 +176,15 @@ describe('hunt + GameState', () => {
       pets: [good, { uid: 'x', species: 'alien', rarity: 'rare', level: 1, name: '' }, { rarity: 'rare' }, null],
       activePetIds: ['g1', 'g1', 'ghost', 42],
     });
-    expect(s.pets).toEqual([good]);
+    expect(s.pets.length).toBe(1);
+    expect(s.pets[0].uid).toBe('g1');
+    expect(s.pets[0].species).toBe('wolfpup');
+    expect(s.pets[0].rarity).toBe('rare');
+    expect(s.pets[0].level).toBe(3);
+    // миграция: mods синтезированы детерминированно (rare = 3 мода)
+    expect(s.pets[0].mods.length).toBe(3);
+    expect(s.pets[0].mods[0].stat).toBe('dps'); // первичка вида
+    expect(s.pets[0].skill).toBeUndefined(); // rare — без скилла
     expect(s.activePetIds).toEqual(['g1']);
   });
 });
@@ -243,7 +254,7 @@ describe('A5 fix pass', () => {
     s.applyRiftGrant(forge, { shards: 100, stabilizers: 0, artifacts: 0, gold: 0, bait: 0, keys: 0 });
     const gained = s.data.shards - base;
     expect(gained).toBe(100); // без бонусов
-    s.data.pets = [{ uid: 'e', species: 'emberlion', rarity: 'common', level: 1, name: '' }]; // +12% осколков
+    s.data.pets = [{ uid: 'e', species: 'emberlion', rarity: 'common', level: 1, name: '', mods: [{ stat: 'shardBonus', value: 12 }] }]; // +12% осколков
     s.data.activePetIds = ['e'];
     const base2 = s.data.shards;
     s.applyRiftGrant(forge, { shards: 100, stabilizers: 0, artifacts: 0, gold: 0, bait: 0, keys: 0 });
@@ -253,8 +264,8 @@ describe('A5 fix pass', () => {
   it('releasePet: duplicates convert to food by rarity', () => {
     const s = new GameState();
     s.data.pets = [
-      { uid: 'a', species: 'wolfpup', rarity: 'common', level: 1, name: '' },
-      { uid: 'b', species: 'wolfpup', rarity: 'legendary', level: 1, name: '' },
+      { uid: 'a', species: 'wolfpup', rarity: 'common', level: 1, name: '', mods: [] },
+      { uid: 'b', species: 'wolfpup', rarity: 'legendary', level: 1, name: '', mods: [] },
     ];
     s.data.activePetIds = ['b'];
     expect(s.releasePet('a')).toBe(2);
@@ -263,5 +274,56 @@ describe('A5 fix pass', () => {
     expect(s.releasePet('b')).toBe(14);
     expect(s.data.activePetIds).toEqual([]);
     expect(s.releasePet('ghost')).toBe(0);
+  });
+});
+
+
+describe('A5.1 hunt ranks', () => {
+  it('ranks unlock by huntsWon and souls', () => {
+    expect(isRankUnlocked(HUNT_RANKS[0], 0, 0)).toBe(true);
+    expect(isRankUnlocked(HUNT_RANKS[1], 2, 0)).toBe(false);
+    expect(isRankUnlocked(HUNT_RANKS[1], 3, 0)).toBe(true);
+    expect(isRankUnlocked(HUNT_RANKS[2], 10, 0)).toBe(false); // нужна душа
+    expect(isRankUnlocked(HUNT_RANKS[4], 50, 8)).toBe(true);
+  });
+
+  it('rarity boost shifts weights to rare tiers', () => {
+    expect(rollCreatureRarity(() => 0.7, 0)).toBe('uncommon');
+    const boosted = rollCreatureRarity(() => 0.7, 1);
+    expect(['rare', 'epic', 'legendary']).toContain(boosted);
+  });
+
+  it('GameState: unlockedHuntRanks + selectHuntRank guards', () => {
+    const s = new GameState();
+    expect(s.unlockedHuntRanks()).toEqual([0]);
+    expect(s.selectHuntRank(2)).toBe(false); // закрыт
+    s.data.huntsWon = 10;
+    s.data.souls = 1;
+    expect(s.unlockedHuntRanks()).toEqual([0, 1, 2]);
+    expect(s.selectHuntRank(2)).toBe(true);
+    expect(s.data.huntRank).toBe(2);
+    expect(s.selectHuntRank(99)).toBe(false); // вне диапазона не выбирается
+  });
+
+  it('rank affects hp/atk/rewards/capture', () => {
+    const low = startHunt(CREATURES[0], 'rare', 1000, 0, () => 0.5, 0);
+    const high = startHunt(CREATURES[0], 'rare', 1000, 0, () => 0.5, 4);
+    expect(high.creatureMaxHp).toBe(Math.floor(low.creatureMaxHp * HUNT_RANKS[4].riskMult));
+    expect(high.creatureAtk).toBe(Math.floor(low.creatureAtk * HUNT_RANKS[4].riskMult));
+    const goldLow = victoryRewards(low, 100, () => 0.9, 0).gold;
+    const goldHigh = victoryRewards(high, 100, () => 0.9, 0).gold;
+    expect(goldHigh).toBeGreaterThanOrEqual(Math.floor(goldLow * HUNT_RANKS[4].rewardMult));
+    expect(captureChance(high)).toBeCloseTo(captureChance(low) - 0.15, 5); // 0.05 → -0.1
+  });
+
+  it('hunt start uses selected rank rarity boost (legendary more likely)', () => {
+    const s = new GameState();
+    s.data.huntsWon = 50;
+    s.data.souls = 8;
+    s.selectHuntRank(4);
+    // ранг V: legendary весит 3*(1+0.55*3)=7.95; rng 0.97..1 может дать legendary
+    const run = s.startHunt(CREATURES[0], seq([0.99]))!;
+    expect(['rare', 'epic', 'legendary', 'uncommon']).toContain(run.creatureRarity);
+    expect(run.rank.id).toBe(4);
   });
 });

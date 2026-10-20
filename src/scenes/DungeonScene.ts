@@ -168,6 +168,10 @@ export class DungeonScene extends Phaser.Scene {
       dmg *= this.state.totalCritMult();
       tag = '💥 КРИТ';
     }
+    if (Math.random() < this.state.ultraCritChance()) {
+      dmg *= this.state.ultraCritMult(); // ультра-крит поверх обычного (питомцы/скиллы)
+      tag = '⚡ УЛЬTRA';
+    }
     this.dealDamage(dmg, tag);
   }
 

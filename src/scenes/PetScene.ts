@@ -1,5 +1,7 @@
 import Phaser from 'phaser';
-import { MAX_ACTIVE_PETS, Pet, petBonus, petFeedCost, getSpecies, CASE_COST_KEYS } from '../core/pets';
+import {
+  MAX_ACTIVE_PETS, Pet, petEffects, petFeedCost, getSpecies, CASE_COST_KEYS, PET_SKILLS,
+} from '../core/pets';
 import { GameState } from '../core/gameState';
 import { RARITY_INFO } from '../core/artifacts';
 
@@ -79,16 +81,24 @@ export class PetScene extends Phaser.Scene {
     const color = RARITY_INFO[pet.rarity].color;
     this.add.rectangle(360, y, 640, 130, 0x1c2018).setStrokeStyle(active ? 3 : 1, active ? 0xffd24a : color);
     const spec = getSpecies(pet.species);
-    const bonus = petBonus(pet);
     const statRu: Record<string, string> = {
       income: 'доход', dps: 'ДПС', click: 'клик', dungeonGold: 'золото данжа',
       shardBonus: 'осколки', keyChance: 'шанс ключа', captureChance: 'шанс поимки',
+      tierJump: 'тир-прыжок', extraSpawn: 'доп. ковка', spawnDiscount: 'скидка ковки',
+      ultraCritChance: 'ультра-крит шанс', ultraCritMult: 'ультра-крит сила', offlineRate: 'оффлайн',
     };
     this.add.text(70, y - 45,
       `${spec.icon} ${pet.name} [${RARITY_INFO[pet.rarity].ru}] Ур.${pet.level}${active ? ' ✅' : ''}`,
       { fontSize: '21px', color: '#' + color.toString(16).padStart(6, '0') });
-    this.add.text(70, y - 10, `Пассив: +${bonus.value}% ${statRu[bonus.stat] ?? bonus.stat}`,
-      { fontSize: '17px', color: '#c8d8b8' });
+    const modsLine = petEffects(pet).map((m) => `+${m.value}% ${statRu[m.stat] ?? m.stat}`).join('  ');
+    this.add.text(70, y - 10, modsLine, { fontSize: '15px', color: '#c8d8b8', wordWrap: { width: 600 } });
+    // уникальный пассив (эпик+): 🖼 заглушка-иконка, ассет по iconKey на этапе B
+    if (pet.skill) {
+      const sk = PET_SKILLS[pet.species];
+      this.add.text(70, y + 12,
+        `[${'◎'} ${sk.name} ${'★'.repeat(pet.skill.stars)}] ${sk.description}`,
+        { fontSize: '14px', color: '#ffd24a' });
+    }
 
     const actBtn = this.add.text(70, y + 35, active ? 'Убрать' : 'В команду', {
       fontSize: '16px', color: '#8aff5a', backgroundColor: '#243020', padding: { x: 8, y: 4 },

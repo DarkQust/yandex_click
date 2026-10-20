@@ -54,6 +54,10 @@ export const INTERSTITIAL_BOSS_INTERVAL = 3;
 /** Активный клик в данже: доля от суммарного ДПС */
 export const CLICK_DAMAGE_RATIO = 0.15;
 
+/** Ультра-крит: поверх обычного крита, урон переумножается (питомцы/скиллы) */
+export const ULTRA_CRIT_CHANCE_CAP = 0.5;
+export const ULTRA_CRIT_BASE_MULT = 5;
+
 /** Шанс перепрыгнуть тир при слиянии (навык "Удача слияния") */
 export const LUCKY_MERGE_BASE_CHANCE = 0.05;
 
