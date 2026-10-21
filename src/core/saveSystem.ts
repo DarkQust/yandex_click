@@ -5,6 +5,7 @@ import { GRID_SIZE } from './config';
 import { Weapon } from './economy';
 import { Artifact, AFFIX_POOL, MAX_EQUIPPED, RARITIES } from './artifacts';
 import { RiftProgress, defaultRiftProgress, RIFTS, RiftId } from './expeditions';
+import { HUNT_RANKS } from './hunts';
 import {
   Pet, PetSpeciesId, PetMod, MAX_ACTIVE_PETS, MAX_SKILL_STARS, PET_MOD_COUNT, PET_MOD_VALUE_CAP,
   PET_SPECIES, PET_SKILLS, PET_SKILL_MIN_RARITY, VALID_PET_STATS, genPetMods, stableRng,
@@ -39,6 +40,9 @@ export interface SaveData {
   petFood: number; // корм для прокачки
   huntsWon: number;
   huntRank: number; // выбранный ранг охоты (0..4)
+  /** Максимальный КОГДА-ЛИБО открытый ранг — разблокировка постоянна,
+   *  трата душ (будущий ресурс) не закрывает ранги повторно */
+  maxUnlockedHuntRank: number;
   lastSeen: number;
 }
 
@@ -71,6 +75,7 @@ export function createDefaultSave(): SaveData {
     petFood: 3,
     huntsWon: 0,
     huntRank: 0,
+    maxUnlockedHuntRank: 0,
     lastSeen: Date.now(),
   };
 }
@@ -127,19 +132,26 @@ function sanitizePets(raw: unknown): Pet[] {
     // модификаторы: строгая валидация — whitelist статов, положительное значение с капом;
     // при несоответствии количества редкости — детерминированный пересинтез из uid
     let mods: PetMod[] = [];
+    let modsCorrupt = false;
     if (Array.isArray(p.mods)) {
-      mods = p.mods.filter(
-        (m): m is PetMod =>
+      for (const m of p.mods) {
+        const valid =
           !!m && typeof m === 'object' &&
           typeof (m as { stat?: string }).stat === 'string' &&
           VALID_PET_STATS.has((m as { stat?: string }).stat as PetMod['stat']) &&
           Number.isFinite((m as { value?: number }).value) &&
           (m as { value: number }).value > 0 &&
-          (m as { value: number }).value <= PET_MOD_VALUE_CAP,
-      );
+          (m as { value: number }).value <= PET_MOD_VALUE_CAP;
+        if (valid) {
+          mods.push(m as PetMod);
+        } else {
+          modsCorrupt = true; // любой мусор обесценивает весь набор
+        }
+      }
     }
-    if (mods.length !== PET_MOD_COUNT[rarity]) {
-      mods = genPetMods(species, rarity, stableRng(p.uid)); // легаси-миграция и битые сейвы
+    // пересинтез: легаси-питомец (без модов), неверное количество ИЛИ любой битый элемент
+    if (modsCorrupt || mods.length !== PET_MOD_COUNT[rarity]) {
+      mods = genPetMods(species, rarity, stableRng(p.uid)); // детерминированно из uid
     }
     // уникальный пассив: только топ-редкости, ID нормализуется к виду, звёзды 1..5 (int)
     let skill = p.skill;
@@ -183,7 +195,11 @@ export function sanitizeSave(raw: unknown): SaveData {
     bait: safeNonNegInt(r.bait, 2),
     petFood: safeNonNegInt(r.petFood, 3),
     huntsWon: safeNonNegInt(r.huntsWon, 0),
-    huntRank: Math.max(0, Math.min(4, safeNonNegInt(r.huntRank, 0))),
+    huntRank: Math.max(0, Math.min(HUNT_RANKS.length - 1, safeNonNegInt(r.huntRank, 0))),
+    maxUnlockedHuntRank: Math.max(
+      0,
+      Math.min(HUNT_RANKS.length - 1, safeNonNegInt(r.maxUnlockedHuntRank, 0)),
+    ),
     stabilizers: Number.isFinite(r.stabilizers) ? (r.stabilizers as number) : 2,
     artifacts: sanitizeArtifacts(r.artifacts),
     grid,

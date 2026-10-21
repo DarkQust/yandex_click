@@ -343,18 +343,64 @@ describe('A5.1-fix: rank validation & consistency', () => {
     expect(s.data.huntRank).toBe(4);
   });
 
-  it('ensureHuntRankAvailable downgrades stale rank when progress drops', () => {
+  it('PERMANENT unlock: spending souls never re-locks an opened rank', () => {
     const s = new GameState();
     s.data.huntsWon = 10;
     s.data.souls = 1;
     expect(s.selectHuntRank(2)).toBe(true);
-    // прогресс «откатился»: души потрачены (будущий ресурс) — ранг III закрылся
+    expect(s.data.maxUnlockedHuntRank).toBe(2); // фиксация разблокировки
+    // души потрачены (будущий расходуемый ресурс) — ранг III остаётся открытым
     s.data.souls = 0;
-    expect(s.ensureHuntRankAvailable()).toBe(1); // понижение до II
-    expect(s.data.huntRank).toBe(1);
-    // охота стартует с пониженным рангом, не с залепленным закрытым
+    expect(s.unlockedHuntRanks()).toEqual([0, 1, 2]);
+    expect(s.ensureHuntRankAvailable()).toBe(2); // выбранный ранг сохранён
+    expect(s.selectHuntRank(2)).toBe(true); // и выбираем повторно
     const run = s.startHunt(CREATURES[0], seq([0.01]))!;
-    expect(run.rank.id).toBe(1);
+    expect(run.rank.id).toBe(2);
+  });
+
+  it('locked rank (never unlocked) cannot be selected even after soul windfall', () => {
+    const s = new GameState(); // свежий прогресс: открыт только ранг I
+    expect(s.selectHuntRank(2)).toBe(false);
+    s.data.souls = 100; // души есть, но побед в охотах не хватает
+    expect(s.selectHuntRank(2)).toBe(false);
+    s.data.huntsWon = 10;
+    s.data.souls = 0; // побед хватает, души потрачены/нет
+    expect(s.selectHuntRank(2)).toBe(false); // reqSouls=1 не выполнено и ранее не открывался
+    s.data.souls = 1;
+    expect(s.selectHuntRank(2)).toBe(true); // открылся
+    s.data.souls = 0;
+    expect(s.selectHuntRank(2)).toBe(true); // и больше не закрывается
+  });
+
+  it('ensureHuntRankAvailable normalizes corrupt saved id (99/-1/2.5) and persists it', () => {
+    const s = new GameState();
+    s.data.huntsWon = 50;
+    s.data.souls = 8;
+    s.data.huntRank = 99; // мусор из сейва
+    expect(s.ensureHuntRankAvailable()).toBe(4); // клампится к V (V открыт)
+    expect(s.data.huntRank).toBe(4); // нормализованное значение ЗАПИСАНО
+    // мусор при закрытом максимуме
+    const s2 = new GameState();
+    s2.data.huntRank = 99;
+    expect(s2.ensureHuntRankAvailable()).toBe(0);
+    expect(s2.data.huntRank).toBe(0);
+    // отрицательный мусор
+    s2.data.huntRank = -5;
+    expect(s2.ensureHuntRankAvailable()).toBe(0);
+    expect(s2.data.huntRank).toBe(0);
+    // дробный мусор (в сейв мог попасть до миграции)
+    s2.data.huntRank = 2.5;
+    expect(s2.ensureHuntRankAvailable()).toBe(0);
+    expect(Number.isInteger(s2.data.huntRank)).toBe(true);
+  });
+
+  it('old save compat: missing maxUnlockedHuntRank defaults, refresh restores level', () => {
+    const migrated = sanitizeSave({ version: 4, huntsWon: 10, souls: 1 });
+    expect(migrated.maxUnlockedHuntRank).toBe(0); // дефолт при миграции
+    const s = new GameState();
+    s.data = migrated;
+    expect(s.unlockedHuntRanks()).toEqual([0, 1, 2]); // первый же refresh поднимает до уровня требований
+    expect(s.data.maxUnlockedHuntRank).toBe(2);
   });
 
   it('startHunt keeps saved rank when still unlocked', () => {

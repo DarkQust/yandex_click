@@ -372,38 +372,47 @@ export class GameState {
     return ULTRA_CRIT_BASE_MULT * (1 + (this.petTotals().ultraCritMult ?? 0) / 100);
   }
 
-  /** Доступные ранги по прогрессу (победы в охотах + души) */
+  /**
+   * Персистентный максимум открытого ранга. Разблокировка ПОСТОЯННАЯ:
+   * ранг открыт однажды — остаётся открытым, даже если души позже тратятся.
+   * Обновляется до текущего уровня требований при каждом обращении.
+   */
+  refreshMaxUnlockedRank(): number {
+    let best = Math.max(0, this.data.maxUnlockedHuntRank ?? 0);
+    for (const r of HUNT_RANKS) {
+      if (isRankUnlocked(r, this.data.huntsWon, this.data.souls)) best = Math.max(best, r.id);
+    }
+    this.data.maxUnlockedHuntRank = best;
+    return best;
+  }
+
+  /** Доступные ранги: 0..персистентного максимума (разблокировка не откатывается) */
   unlockedHuntRanks(): number[] {
-    return HUNT_RANKS.filter((r) => isRankUnlocked(r, this.data.huntsWon, this.data.souls)).map((r) => r.id);
+    const max = this.refreshMaxUnlockedRank();
+    return HUNT_RANKS.filter((r) => r.id <= max).map((r) => r.id);
   }
 
   /**
-   * Выбор ранга охоты. Валидируем ИСХОДНЫЙ ID до клампа:
-   * нецелые, отрицательные и вне диапазона значения отклоняются,
-   * даже если прогресс открывает ранг V (иначе 99 молча выбирал бы V).
+   * Выбор ранга охоты. Строгая валидация исходного ID (int, 0..len-1)
+   * + ранг должен быть ПОСТОЯННО открыт (id <= maxUnlockedHuntRank).
    */
   selectHuntRank(rankId: number): boolean {
     if (!Number.isInteger(rankId) || rankId < 0 || rankId >= HUNT_RANKS.length) return false;
-    const rank = getHuntRank(rankId);
-    if (!isRankUnlocked(rank, this.data.huntsWon, this.data.souls)) return false;
-    this.data.huntRank = rank.id;
+    if (rankId > this.refreshMaxUnlockedRank()) return false; // никогда не открыт
+    this.data.huntRank = rankId;
     return true;
   }
 
   /**
-   * Согласованность: выбранный ранг не должен «залипать» закрытым,
-   * если прогресс откатился (например, души станут тратящимся ресурсом).
-   * Понижаем до максимального доступного и фиксируем в сейве.
+   * Согласованность и нормализация: исправляем некорректный сохранённый ID
+   * (кламп getHuntRank не должен оставлять в сейве мусор вроде 99/−1/2.5)
+   * и понижаем ранг лишь в случае, если он НИКОГДА не был открыт.
    */
   ensureHuntRankAvailable(): number {
-    const current = getHuntRank(this.data.huntRank);
-    if (isRankUnlocked(current, this.data.huntsWon, this.data.souls)) return current.id;
-    let best = 0;
-    for (const r of HUNT_RANKS) {
-      if (isRankUnlocked(r, this.data.huntsWon, this.data.souls)) best = r.id;
-    }
-    this.data.huntRank = best;
-    return best;
+    const max = this.refreshMaxUnlockedRank();
+    const normalized = getHuntRank(this.data.huntRank).id; // 0..4, целое
+    this.data.huntRank = normalized <= max ? normalized : max;
+    return this.data.huntRank;
   }
 
   /** Начать охоту выбранного ранга: тратит приманку, роллит редкость с бустом ранга */

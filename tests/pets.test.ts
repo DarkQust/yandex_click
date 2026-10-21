@@ -236,6 +236,35 @@ describe('A5.1-fix: save hardening', () => {
     expect(pet.mods[0].stat).toBe('dps'); // первичка вида сохраняется при пересинтезе
   });
 
+  it('any invalid mod forces full resynth even if filtered count matches rarity', () => {
+    // epic = 4 мода; сейв принес 5, один битый → после фильтра 4 «валидных» —
+    // прежний код сохранил бы их; новый: пересинтез всего набора из uid
+    const raw = {
+      pets: [
+        {
+          uid: 'corrupt1', species: 'wolfpup', rarity: 'epic', level: 1, name: '',
+          mods: [
+            { stat: 'dps', value: 10 },
+            { stat: 'click', value: 20 },
+            { stat: 'income', value: 30 },
+            { stat: 'ultraCritChance', value: 5 },
+            { stat: 'hacked_stat', value: 50 }, // битый элемент — мусор
+          ],
+        },
+      ],
+    };
+    const s = sanitizeSave(raw);
+    const mods = s.pets[0].mods;
+    expect(mods.length).toBe(PET_MOD_COUNT.epic);
+    expect(mods[0].stat).toBe('dps'); // первичка вида — маркер пересинтеза
+    // пересинтез детерминирован: повторная санитизация даёт тот же набор
+    const again = sanitizeSave(raw);
+    expect(again.pets[0].mods).toEqual(mods);
+    // ни один мод не равен «выжившим» из битого набора (полная замена)
+    const survivor = { stat: 'click', value: 20 };
+    expect(mods).not.toContainEqual(survivor);
+  });
+
   it('valid mods of exact count are kept as-is', () => {
     const mods = [
       { stat: 'dps', value: 12.5 },
