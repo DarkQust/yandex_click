@@ -46,7 +46,7 @@ export interface SaveData {
   lastSeen: number;
 }
 
-export const SAVE_VERSION = 4;
+export const SAVE_VERSION = 5;
 const LOCAL_KEY = 'forge_of_heroes_save_v1';
 
 export function createDefaultSave(): SaveData {
@@ -117,7 +117,7 @@ function sanitizeArtifacts(raw: unknown): Artifact[] {
 }
 
 /** Минимальная структурная валидация питомцев из сейва */
-function sanitizePets(raw: unknown): Pet[] {
+function sanitizePets(raw: unknown, forceModResynth = false): Pet[] {
   if (!Array.isArray(raw)) return [];
   const speciesIds = new Set(PET_SPECIES.map((x) => x.id as string));
   const out: Pet[] = [];
@@ -149,9 +149,10 @@ function sanitizePets(raw: unknown): Pet[] {
         }
       }
     }
-    // пересинтез: легаси-питомец (без модов), неверное количество ИЛИ любой битый элемент
-    if (modsCorrupt || mods.length !== PET_MOD_COUNT[rarity]) {
-      mods = genPetMods(species, rarity, stableRng(p.uid)); // детерминированно из uid
+    // пересинтез: миграция v4 (однократно), легаси-питомец (без модов),
+    // неверное количество ИЛИ любой битый элемент. Повторы статов валидны.
+    if (forceModResynth || modsCorrupt || mods.length !== PET_MOD_COUNT[rarity]) {
+      mods = genPetMods(rarity, stableRng(p.uid)); // детерминированно из uid (v5-генератор)
     }
     // уникальный пассив: только топ-редкости, ID нормализуется к виду, звёзды 1..5 (int)
     let skill = p.skill;
@@ -221,8 +222,10 @@ export function sanitizeSave(raw: unknown): SaveData {
     }
   }
   out.riftProgress = riftDef;
-  // питомцы: структурная валидация + команда без дублей/призраков/лимита
-  out.pets = sanitizePets(r.pets);
+  // питомцы: v4 -> v5 однократная миграция (моды пересоздаются НОВЫМ генератором);
+  // v5-наборы (в т.ч. с повторами статов) валидируются и сохраняются как есть
+  const forceModResynth = (r.version ?? 0) < 5;
+  out.pets = sanitizePets(r.pets, forceModResynth);
   const petIds = new Set(out.pets.map((x) => x.uid));
   out.activePetIds = (Array.isArray(r.activePetIds) ? r.activePetIds : [])
     .filter((id): id is string => typeof id === 'string')

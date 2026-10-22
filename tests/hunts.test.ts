@@ -183,7 +183,7 @@ describe('hunt + GameState', () => {
     expect(s.pets[0].level).toBe(3);
     // миграция: mods синтезированы детерминированно (rare = 3 мода)
     expect(s.pets[0].mods.length).toBe(3);
-    expect(s.pets[0].mods[0].stat).toBe('dps'); // первичка вида
+    // v5: генератор не навязывает первичный стат вида — проверяем лишь валидность
     expect(s.pets[0].skill).toBeUndefined(); // rare — без скилла
     expect(s.activePetIds).toEqual(['g1']);
   });
@@ -254,11 +254,12 @@ describe('A5 fix pass', () => {
     s.applyRiftGrant(forge, { shards: 100, stabilizers: 0, artifacts: 0, gold: 0, bait: 0, keys: 0 });
     const gained = s.data.shards - base;
     expect(gained).toBe(100); // без бонусов
-    s.data.pets = [{ uid: 'e', species: 'emberlion', rarity: 'common', level: 1, name: '', mods: [{ stat: 'shardBonus', value: 12 }] }]; // +12% осколков
+    s.data.pets = [{ uid: 'e', species: 'emberlion', rarity: 'common', level: 1, name: '', mods: [{ stat: 'shardBonus', value: 12 }] }];
     s.data.activePetIds = ['e'];
     const base2 = s.data.shards;
     s.applyRiftGrant(forge, { shards: 100, stabilizers: 0, artifacts: 0, gold: 0, bait: 0, keys: 0 });
-    expect(s.data.shards - base2).toBe(112);
+    // v5: врождённая специализация emberlion = +12% осколков И мод +12% → 100 × 1.24
+    expect(s.data.shards - base2).toBe(124);
   });
 
   it('releasePet: duplicates convert to food by rarity', () => {

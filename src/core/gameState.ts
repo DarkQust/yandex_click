@@ -190,12 +190,17 @@ export class GameState {
   }
 
   totalCritChance(): number {
-    const raw = this.effects.critChance + (this.artifactTotals().critChance ?? 0) / 100;
+    const raw =
+      this.effects.critChance +
+      (this.artifactTotals().critChance ?? 0) / 100 +
+      (this.petTotals().critChance ?? 0) / 100;
     return Math.min(CRIT_CHANCE_CAP, Math.max(0, raw));
   }
 
   totalCritMult(): number {
-    return CRIT_BASE_MULT * (1 + (this.artifactTotals().critMult ?? 0) / 100);
+    const art = (this.artifactTotals().critMult ?? 0) / 100;
+    const pet = (this.petTotals().critMult ?? 0) / 100;
+    return CRIT_BASE_MULT * (1 + art + pet);
   }
 
   totalLuckyMergeChance(): number {

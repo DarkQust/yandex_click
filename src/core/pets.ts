@@ -17,6 +17,8 @@ export type PetStat =
   | 'spawnDiscount' // -% цена ковки (в кузнице)
   | 'ultraCritChance' // +% шанс ультра-крита (поверх обычного крита)
   | 'ultraCritMult' // +% сила ультра-крита
+  | 'critChance' // +% шанс обычного крита
+  | 'critMult' // +% сила обычного крита
   | 'offlineRate'; // +% оффлайн-доход
 
 export interface PetSpeciesDef {
@@ -53,10 +55,22 @@ export const PET_MOD_COUNT: Record<Rarity, number> = {
   common: 2, uncommon: 2, rare: 3, epic: 4, legendary: 5,
 };
 
-/** Вторичный пул модификаторов (помимо первичного стата вида) */
-const SECONDARY_POOL: PetStat[] = [
-  'income', 'dps', 'click', 'dungeonGold', 'shardBonus', 'keyChance',
-  'tierJump', 'extraSpawn', 'spawnDiscount', 'ultraCritChance', 'ultraCritMult', 'offlineRate',
+/**
+ * Базовые значения МОДИФИКАТОРОВ по характеристикам (v5).
+ * Врождённая специализация вида (baseBonus) НИКАК не влияет на роллы модов —
+ * моды катаются из общей таблицы, с повторами статов.
+ */
+export const PET_STAT_BASE: Record<PetStat, number> = {
+  income: 8, dps: 8, click: 12, dungeonGold: 10, shardBonus: 10, keyChance: 12,
+  captureChance: 8, tierJump: 6, extraSpawn: 8, spawnDiscount: 6,
+  ultraCritChance: 4, ultraCritMult: 15, critChance: 5, critMult: 20, offlineRate: 10,
+};
+
+/** Полный пул модификаторов — включая captureChance и криты, с повторами */
+const MOD_POOL: PetStat[] = [
+  'income', 'dps', 'click', 'dungeonGold', 'shardBonus', 'keyChance', 'captureChance',
+  'tierJump', 'extraSpawn', 'spawnDiscount', 'ultraCritChance', 'ultraCritMult',
+  'critChance', 'critMult', 'offlineRate',
 ];
 
 // ---------- Уникальные пассивы (эпик+легендарка): звёздная градация 1-5 ----------
@@ -108,10 +122,7 @@ export interface Pet {
 }
 
 /** Полный whitelist характеристик питомцев (для валидации сейвов) */
-export const VALID_PET_STATS: ReadonlySet<PetStat> = new Set<PetStat>([
-  'income', 'dps', 'click', 'dungeonGold', 'shardBonus', 'keyChance', 'captureChance',
-  'tierJump', 'extraSpawn', 'spawnDiscount', 'ultraCritChance', 'ultraCritMult', 'offlineRate',
-]);
+export const VALID_PET_STATS: ReadonlySet<PetStat> = new Set<PetStat>(MOD_POOL);
 
 /** Верхняя граница значения одного модификатора (защита от читерских сейвов) */
 export const PET_MOD_VALUE_CAP = 10000;
@@ -137,31 +148,37 @@ export function stableRng(seed: string): () => number {
   };
 }
 
-/** Генерация модификаторов: первичный стат вида + вторичные из пула */
-export function genPetMods(
-  species: PetSpeciesId,
-  rarity: Rarity,
-  rng: () => number,
-): PetMod[] {
-  const def = getSpecies(species);
+/**
+ * Генерация СЛУЧАЙНЫХ модификаторов (v5): N слотов по редкости,
+ * стат катается из общего пула С ПОВТОРАМИ, значения из PET_STAT_BASE × редкость.
+ * Врождённая специализация вида здесь не участвует.
+ */
+export function genPetMods(rarity: Rarity, rng: () => number): PetMod[] {
   const count = PET_MOD_COUNT[rarity];
-  const taken = new Set<PetStat>([def.stat]);
-  const stats: PetStat[] = [def.stat];
-  const pool = SECONDARY_POOL.filter((s) => !taken.has(s));
-  while (stats.length < count && pool.length > 0) {
-    const idx = Math.floor(rng() * pool.length);
-    stats.push(pool.splice(idx, 1)[0]);
-  }
   const mult = PET_RARITY_MULT[rarity];
-  return stats.map((stat) => ({
-    stat,
-    value: Math.round(def.baseBonus * mult * (0.6 + rng() * 0.8) * 10) / 10,
-  }));
+  const mods: PetMod[] = [];
+  for (let i = 0; i < count; i++) {
+    const stat = MOD_POOL[Math.floor(rng() * MOD_POOL.length)];
+    const value = PET_STAT_BASE[stat] * mult * (0.6 + rng() * 0.8);
+    mods.push({ stat, value: Math.round(value * 10) / 10 });
+  }
+  return mods;
+}
+
+/**
+ * Врождённая специализация вида (слой 1): гарантирована каждому экземпляру,
+ * считается отдельно от mods, с множителем редкости и уровня.
+ */
+export function innateBonus(pet: Pet): PetMod {
+  const def = getSpecies(pet.species);
+  const levelScale = 1 + 0.2 * (pet.level - 1);
+  const value = def.baseBonus * PET_RARITY_MULT[pet.rarity] * levelScale;
+  return { stat: def.stat, value: Math.round(value * 10) / 10 };
 }
 
 /** Модификаторы питомца с учётом уровня; старые питомцы без mods — детерминированный синтез */
 export function petMods(pet: Pet): PetMod[] {
-  const source = pet.mods && pet.mods.length > 0 ? pet.mods : genPetMods(pet.species, pet.rarity, stableRng(pet.uid));
+  const source = pet.mods && pet.mods.length > 0 ? pet.mods : genPetMods(pet.rarity, stableRng(pet.uid));
   const levelScale = 1 + 0.2 * (pet.level - 1);
   return source.map((m) => ({ stat: m.stat, value: Math.round(m.value * levelScale * 10) / 10 }));
 }
@@ -175,11 +192,12 @@ export function petSkillBonus(pet: Pet): PetMod | null {
   return { stat: def.stat, value: Math.round(def.perStar * stars * 10) / 10 };
 }
 
-/** Все эффекты питомца: модификаторы + уникальный пассив */
+/** Все эффекты питомца: врождённая специализация + модификаторы + уникальный пассив */
 export function petEffects(pet: Pet): PetMod[] {
+  const innate = innateBonus(pet);
   const mods = petMods(pet);
   const skill = petSkillBonus(pet);
-  return skill ? [...mods, skill] : mods;
+  return skill ? [innate, ...mods, skill] : [innate, ...mods];
 }
 
 /** Сумма эффектов команды (моды + скиллы) */
@@ -228,7 +246,7 @@ export function openPetCase(rng: () => number = Math.random): Pet {
     rarity,
     level: 1,
     name: species.name,
-    mods: genPetMods(species.id, rarity, rng),
+    mods: genPetMods(rarity, rng),
     skill: petSkillFor(rarity, species.id),
   };
 }
@@ -245,7 +263,7 @@ export function petFromCapture(
     rarity,
     level: 1,
     name: getSpecies(species).name,
-    mods: genPetMods(species, rarity, rng),
+    mods: genPetMods(rarity, rng),
     skill: petSkillFor(rarity, species),
   };
 }

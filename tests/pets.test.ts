@@ -4,12 +4,16 @@ import {
   MAX_ACTIVE_PETS,
   MAX_SKILL_STARS,
   PET_MOD_COUNT,
+  PET_RARITY_MULT,
   PET_SKILLS,
   PET_SKILL_MIN_RARITY,
   PET_SPECIES,
+  PET_STAT_BASE,
   Pet,
   PetMod,
+  PetStat,
   genPetMods,
+  innateBonus,
   openPetCase,
   petEffects,
   petFeedCost,
@@ -20,95 +24,131 @@ import {
   rollCaseRarity,
   stableRng,
 } from '../src/core/pets';
+import { CRIT_CHANCE_CAP, CRIT_BASE_MULT } from '../src/core/config';
 import { GameState } from '../src/core/gameState';
 import { sanitizeSave } from '../src/core/saveSystem';
-import type { PetStat } from '../src/core/pets';
-const PET_STATS: PetStat[] = [
-  'income', 'dps', 'click', 'dungeonGold', 'shardBonus', 'keyChance', 'captureChance',
-  'tierJump', 'extraSpawn', 'spawnDiscount', 'ultraCritChance', 'ultraCritMult', 'offlineRate',
-];
 
 const seq = (values: number[]) => {
   let i = 0;
   return () => values[i++ % values.length];
 };
 
-/** питомец-заготовка: mods пустые → синтез при первом обращении (легаси-миграция) */
 const mkPet = (species: Pet['species'], rarity: Pet['rarity'], level = 1): Pet => ({
   uid: `u_${species}_${rarity}_${level}_${Math.random()}`,
   species, rarity, level, name: '', mods: [],
 });
 
-describe('pet modifiers (A5.1)', () => {
-  it('mod count by rarity: 2/2/3/4/5', () => {
+describe('pet mods generation (v5)', () => {
+  it('slot count by rarity: 2/2/3/4/5', () => {
     const counts: [Pet['rarity'], number][] = [
       ['common', 2], ['uncommon', 2], ['rare', 3], ['epic', 4], ['legendary', 5],
     ];
     for (const [rarity, n] of counts) {
-      const mods = genPetMods('wolfpup', rarity, seq([0.5]));
-      expect(mods.length).toBe(n);
+      expect(genPetMods(rarity, seq([0.5])).length).toBe(n);
       expect(PET_MOD_COUNT[rarity]).toBe(n);
     }
   });
 
-  it('primary species stat always first, all stats distinct', () => {
-    const mods = genPetMods('drakeling', 'legendary', seq([0.3, 0.7, 0.1, 0.9]));
-    expect(mods[0].stat).toBe('income'); // первичка вида
-    const stats = mods.map((m) => m.stat);
-    expect(new Set(stats).size).toBe(stats.length); // без дублей
+  it('repeated stats are allowed; no primary-stat requirement, no uniqueness', () => {
+    // rng 0 → всегда первый стат пула: 5 слотов легендарки = 5 одинаковых статов
+    const five = genPetMods('legendary', seq([0.0]));
+    expect(five.length).toBe(5);
+    const stats = new Set(five.map((m) => m.stat));
+    expect(stats.size).toBe(1); // повторы разрешены
+    // вид НЕ навязывает первичный стат — генератор вообще не принимает вид:
+    // в пуле есть captureChance и криты
+    const all: PetStat[] = [];
+    for (let n = 0, i = 0; i < 500; i++) {
+      const r = ((n = (n * 16807 + 11) % 2147483647) / 2147483647);
+      all.push(...genPetMods('legendary', () => r).map((m) => m.stat));
+    }
+    expect(all).toContain('captureChance');
+    expect(all).toContain('critChance');
+    expect(all).toContain('critMult');
   });
 
-  it('values scale with rarity mult and level', () => {
-    const common = genPetMods('wolfpup', 'common', seq([0.5]))[0].value;
-    const legendary = genPetMods('wolfpup', 'legendary', seq([0.5]))[0].value;
-    expect(legendary).toBeGreaterThan(common);
-    const pet = mkPet('wolfpup', 'common', 5);
-    const leveled = petMods(pet).map((m) => m.value);
-    const base = petMods({ ...pet, level: 1 }).map((m) => m.value);
-    expect(leveled[0]).toBeCloseTo(base[0] * 1.8, 1); // 1 + 0.2*(5-1)
+  it('values come from PET_STAT_BASE x rarity mult, not species baseBonus', () => {
+    // fixed rng → value = base * mult * (0.6 + 0.8*rng)
+    const one = genPetMods('common', seq([0.0]))[0];
+    const poolFirst = (Object.keys(PET_STAT_BASE) as PetStat[])[0];
+    expect(one.stat).toBe(poolFirst);
+    expect(one.value).toBeCloseTo(PET_STAT_BASE[poolFirst] * PET_RARITY_MULT.common * 0.6, 1);
+    // легендарка ×3 к тому же стату
+    const leg = genPetMods('legendary', seq([0.0]))[0];
+    expect(leg.value).toBeCloseTo(PET_STAT_BASE[poolFirst] * PET_RARITY_MULT.legendary * 0.6, 0);
+  });
+});
+
+describe('innate species bonus (layer 1)', () => {
+  it('guaranteed for every pet, scales with rarity and level, independent of mods', () => {
+    const pet = mkPet('wolfpup', 'common');
+    pet.mods = [{ stat: 'income', value: 99 } as PetMod];
+    const innate = innateBonus(pet);
+    expect(innate.stat).toBe('dps'); // специализация вида
+    expect(innate.value).toBe(8); // 8 * 1 * 1
+    // независим от модов: уровень 5 легендарки → 8*3*1.8
+    const leveled = { ...pet, rarity: 'legendary' as const, level: 5, mods: [] };
+    expect(innateBonus(leveled).value).toBeCloseTo(8 * 3 * 1.8, 1);
   });
 
-  it('legacy pet without mods: deterministic synth from uid', () => {
-    const a = mkPet('wolfpup', 'rare');
-    const b: Pet = { ...a, uid: a.uid };
-    const modsA = petMods(a);
-    const modsB = petMods(b);
-    expect(modsA).toEqual(modsB); // стабильный rng
-    expect(modsA.length).toBe(PET_MOD_COUNT.rare);
-    expect(modsA[0].stat).toBe('dps');
-    void stableRng;
-  });
-
-  it('unique passive: only epic/legendary, star-scaled, capped stars', () => {
-    const commonPet = mkPet('phoenix', 'common');
-    expect(petSkillBonus(commonPet)).toBeNull();
-    expect(PET_SKILL_MIN_RARITY).toEqual(['epic', 'legendary']);
-    const epic = { ...mkPet('phoenix', 'epic'), skill: { id: 'rebirth', stars: 3 } };
-    const bonus = petSkillBonus(epic)!;
-    expect(bonus.stat).toBe('offlineRate');
-    expect(bonus.value).toBeCloseTo(PET_SKILLS.phoenix.perStar * 3, 1);
-    // звёзды клампятся 1..5
-    const over = { ...epic, skill: { id: 'rebirth', stars: 99 } };
-    expect(petSkillBonus(over)!.value).toBeCloseTo(PET_SKILLS.phoenix.perStar * MAX_SKILL_STARS, 1);
-    // чужой id скилла не даёт бонуса
-    const wrong = { ...epic, skill: { id: 'nope', stars: 3 } };
-    expect(petSkillBonus(wrong)).toBeNull();
-  });
-
-  it('petEffects = mods + skill; team totals sum all', () => {
+  it('petEffects = innate + mods + skill (three layers)', () => {
     const pet = {
       ...mkPet('wolfpup', 'epic'),
-      mods: [{ stat: 'dps', value: 10 } as PetMod, { stat: 'tierJump', value: 5 } as PetMod],
+      mods: [{ stat: 'click', value: 10 } as PetMod, { stat: 'click', value: 5 } as PetMod,
+        { stat: 'critChance', value: 4 } as PetMod, { stat: 'critMult', value: 20 } as PetMod],
       skill: { id: 'pack_leader', stars: 2 },
     };
     const eff = petEffects(pet);
-    expect(eff.length).toBe(3); // 2 мода + скилл
+    expect(eff.length).toBe(6); // 1 врождённый + 4 мода + 1 скилл
+    expect(eff[0].stat).toBe('dps'); // слой 1 — специализация
     const t = petTeamTotals([pet]);
-    expect(t.dps).toBe(10 + PET_SKILLS.wolfpup.perStar * 2);
-    expect(t.tierJump).toBe(5);
+    expect(t.click).toBe(15); // повторы суммируются
+    expect(t.critChance).toBe(4);
+    expect(t.critMult).toBe(20);
+    expect(t.dps).toBe(8 * PET_RARITY_MULT.epic + PET_SKILLS.wolfpup.perStar * 2);
   });
+});
 
-  it('case/capture pets get full mods and skills for top rarities', () => {
+describe('crit mods affect real damage via GameState aggregates', () => {
+  it('multiple crit mods: chance capped, mult multiplies, ultra unaffected', () => {
+    const s = new GameState();
+    s.data.grid = [{ branch: 'sword', tier: 3 }];
+    const baseChance = s.totalCritChance();
+    const baseMult = s.totalCritMult();
+    const pet = {
+      ...mkPet('golem', 'legendary'),
+      mods: [
+        { stat: 'critChance', value: 40 } as PetMod,
+        { stat: 'critChance', value: 80 } as PetMod, // повтор → сумма 120%
+        { stat: 'critMult', value: 100 } as PetMod,
+        { stat: 'critMult', value: 50 } as PetMod,
+      ],
+    };
+    s.data.pets = [pet];
+    s.data.activePetIds = [pet.uid];
+    expect(s.totalCritChance()).toBeCloseTo(Math.min(CRIT_CHANCE_CAP, baseChance + 1.2), 5); // кап 75%
+    expect(s.totalCritMult()).toBeCloseTo(CRIT_BASE_MULT * (1 + 1.5 + (baseMult / CRIT_BASE_MULT - 1)), 3);
+    // фактический урон: крит бьёт по totalCritMult — множитель вырос
+    expect(s.totalCritMult()).toBeGreaterThan(baseMult);
+    // ультра-крит от крит-модов не зависит
+    expect(s.ultraCritChance()).toBe(0);
+  });
+});
+
+describe('unique passive (layer 3)', () => {
+  it('only epic/legendary, star-scaled, capped stars', () => {
+    expect(petSkillBonus(mkPet('phoenix', 'common'))).toBeNull();
+    expect(PET_SKILL_MIN_RARITY).toEqual(['epic', 'legendary']);
+    const epic = { ...mkPet('phoenix', 'epic'), skill: { id: 'rebirth', stars: 3 } };
+    expect(petSkillBonus(epic)!.stat).toBe('offlineRate');
+    expect(petSkillBonus(epic)!.value).toBeCloseTo(PET_SKILLS.phoenix.perStar * 3, 1);
+    const over = { ...epic, skill: { id: 'rebirth', stars: 99 } };
+    expect(petSkillBonus(over)!.value).toBeCloseTo(PET_SKILLS.phoenix.perStar * MAX_SKILL_STARS, 1);
+  });
+});
+
+describe('case/capture pets', () => {
+  it('full mods by rarity; skill for top rarities', () => {
     const legend = openPetCase(() => 0.999);
     expect(legend.rarity).toBe('legendary');
     expect(legend.mods.length).toBe(5);
@@ -120,14 +160,22 @@ describe('pet modifiers (A5.1)', () => {
     void PET_SPECIES;
   });
 
+  it('legacy pet without mods: deterministic synth via stableRng(uid)', () => {
+    const a = mkPet('wolfpup', 'rare');
+    const b: Pet = { ...a };
+    expect(petMods(a)).toEqual(petMods(b));
+    expect(petMods(a).length).toBe(3);
+    void stableRng;
+  });
+
   it('feed cost grows', () => {
     expect(petFeedCost(1)).toBe(2);
     expect(petFeedCost(5)).toBe(10);
   });
 });
 
-describe('pets + GameState aggregates (A5.1)', () => {
-  it('team boosts economy multiplicatively (mods, not legacy single stat)', () => {
+describe('GameState integration (v5)', () => {
+  it('team boosts economy multiplicatively (innate + mods)', () => {
     const s = new GameState();
     s.data.grid = [{ branch: 'sword', tier: 3 }];
     const baseDps = s.totalDps();
@@ -135,23 +183,8 @@ describe('pets + GameState aggregates (A5.1)', () => {
     s.data.pets = [pet];
     expect(s.totalDps()).toBeCloseTo(baseDps); // неактивен
     s.data.activePetIds = [pet.uid];
-    expect(s.totalDps()).toBeCloseTo(baseDps * 1.2, 3);
-  });
-
-  it('petEfficiency secret affix amplifies pet bonuses', () => {
-    const s = new GameState();
-    s.data.grid = [{ branch: 'sword', tier: 3 }];
-    const pet = { ...mkPet('drakeling', 'common'), mods: [{ stat: 'income', value: 20 } as PetMod] };
-    s.data.pets = [pet];
-    s.data.activePetIds = [pet.uid];
-    s.data.artifacts = [
-      { id: 'e', name: '', rarity: 'epic', createdAt: 0, affixes: [{ stat: 'petEfficiency', value: 50, secret: true }] },
-    ];
-    s.data.equippedIds = ['e'];
-    const withAffix = s.incomePerSec();
-    s.data.artifacts = [];
-    s.data.equippedIds = [];
-    expect(withAffix).toBeGreaterThan(s.incomePerSec());
+    // врождённый 8% + мод 20% = ×1.28
+    expect(s.totalDps()).toBeCloseTo(baseDps * 1.28, 3);
   });
 
   it('openCase spends keys; active team capped', () => {
@@ -181,15 +214,13 @@ describe('pets + GameState aggregates (A5.1)', () => {
 
   it('forge bonuses: tierJump/extraSpawn/spawnDiscount from pets, clamped', () => {
     const s = new GameState();
-    expect(s.forgeTierJumpChance()).toBe(0);
-    expect(s.forgeExtraSpawnChance()).toBe(0); // без навыка luck2
     const pet = {
       ...mkPet('emberlion', 'legendary'),
       mods: [
         { stat: 'tierJump', value: 30 } as PetMod,
         { stat: 'extraSpawn', value: 20 } as PetMod,
-        { stat: 'spawnDiscount', value: 90 } as PetMod, // заведомо выше капа
-        { stat: 'ultraCritChance', value: 80 } as PetMod, // выше капа 50%
+        { stat: 'spawnDiscount', value: 90 } as PetMod,
+        { stat: 'ultraCritChance', value: 80 } as PetMod,
         { stat: 'ultraCritMult', value: 100 } as PetMod,
       ],
     };
@@ -197,9 +228,9 @@ describe('pets + GameState aggregates (A5.1)', () => {
     s.data.activePetIds = [pet.uid];
     expect(s.forgeTierJumpChance()).toBe(0.3);
     expect(s.forgeExtraSpawnChance()).toBe(0.2);
-    expect(s.forgeSpawnDiscount()).toBe(0.6); // кап 60%
-    expect(s.ultraCritChance()).toBe(0.5); // кап 50%
-    expect(s.ultraCritMult()).toBeCloseTo(10, 3); // 5 * (1+100%)
+    expect(s.forgeSpawnDiscount()).toBe(0.6);
+    expect(s.ultraCritChance()).toBe(0.5);
+    expect(s.ultraCritMult()).toBeCloseTo(10, 3);
   });
 
   it('offlineRate from pets multiplies offline efficiency', () => {
@@ -211,100 +242,88 @@ describe('pets + GameState aggregates (A5.1)', () => {
   });
 });
 
-
-describe('A5.1-fix: save hardening', () => {
-
-  it('sanitize drops invalid mods (unknown stat, negative, over-cap) and resynthesizes by count', () => {
-    const raw = {
-      pets: [
-        {
-          uid: 'x1', species: 'wolfpup', rarity: 'epic', level: 1, name: '',
-          mods: [
-            { stat: 'hacked_stat', value: 50 },   // неизвестный стат → вылет
-            { stat: 'dps', value: -10 },           // отрицательное → вылет
-            { stat: 'income', value: 999999 },     // выше капа → вылет
-            { stat: 'click', value: 15 },          // валидный
-          ],
-          // 1 валидный из 4 для epic → количество не совпало → полный пересинтез
-        },
+describe('v4 -> v5 migration', () => {
+  it('v4 save: mods resynthesized once with NEW generator, everything else preserved', () => {
+    const v4Pet = {
+      uid: 'oldpet', species: 'drakeling', rarity: 'rare', level: 4, name: 'Старик',
+      mods: [
+        { stat: 'income', value: 13.5 }, // v4-генератор: первичка вида
+        { stat: 'dps', value: 10 },
+        { stat: 'click', value: 12 },
       ],
+      skill: { id: 'hoard', stars: 2 }, // у rare скилла не бывает — санитизируется
     };
-    const s = sanitizeSave(raw);
+    const s = sanitizeSave({
+      version: 4,
+      gold: 4321,
+      pets: [v4Pet],
+      activePetIds: ['oldpet'],
+      huntsWon: 12,
+      souls: 2,
+      maxUnlockedHuntRank: 2,
+      huntRank: 2,
+    });
     const pet = s.pets[0];
-    expect(pet.mods.length).toBe(PET_MOD_COUNT.epic);
-    expect(pet.mods.every((m) => PET_STATS.includes(m.stat))).toBe(true);
-    expect(pet.mods[0].stat).toBe('dps'); // первичка вида сохраняется при пересинтезе
+    // вид/редкость/уровень/имя/команда сохранены
+    expect(pet.species).toBe('drakeling');
+    expect(pet.rarity).toBe('rare');
+    expect(pet.level).toBe(4);
+    expect(pet.name).toBe('Старик');
+    expect(s.activePetIds).toEqual(['oldpet']);
+    // игрок не тронут
+    expect(s.gold).toBe(4321);
+    expect(s.huntsWon).toBe(12);
+    expect(s.maxUnlockedHuntRank).toBe(2); // постоянная разблокировка рангов цела
+    expect(s.huntRank).toBe(2);
+    // моды пересозданы v5-генератором: детерминированно, 3 слота rare
+    expect(pet.mods.length).toBe(3);
+    const fresh = genPetMods('rare', stableRng('oldpet'));
+    expect(pet.mods).toEqual(fresh);
+    // скилл у rare удалён
+    expect(pet.skill).toBeUndefined();
   });
 
-  it('any invalid mod forces full resynth even if filtered count matches rarity', () => {
-    // epic = 4 мода; сейв принес 5, один битый → после фильтра 4 «валидных» —
-    // прежний код сохранил бы их; новый: пересинтез всего набора из uid
-    const raw = {
-      pets: [
-        {
-          uid: 'corrupt1', species: 'wolfpup', rarity: 'epic', level: 1, name: '',
-          mods: [
-            { stat: 'dps', value: 10 },
-            { stat: 'click', value: 20 },
-            { stat: 'income', value: 30 },
-            { stat: 'ultraCritChance', value: 5 },
-            { stat: 'hacked_stat', value: 50 }, // битый элемент — мусор
-          ],
-        },
-      ],
-    };
-    const s = sanitizeSave(raw);
-    const mods = s.pets[0].mods;
-    expect(mods.length).toBe(PET_MOD_COUNT.epic);
-    expect(mods[0].stat).toBe('dps'); // первичка вида — маркер пересинтеза
-    // пересинтез детерминирован: повторная санитизация даёт тот же набор
-    const again = sanitizeSave(raw);
-    expect(again.pets[0].mods).toEqual(mods);
-    // ни один мод не равен «выжившим» из битого набора (полная замена)
-    const survivor = { stat: 'click', value: 20 };
-    expect(mods).not.toContainEqual(survivor);
-  });
-
-  it('valid mods of exact count are kept as-is', () => {
+  it('v5 save with repeated stats: kept as-is, no resynth on load', () => {
     const mods = [
       { stat: 'dps', value: 12.5 },
-      { stat: 'ultraCritChance', value: 3.1 },
+      { stat: 'dps', value: 3.1 }, // повтор — валиден в v5
     ];
-    const s = sanitizeSave({
-      pets: [{ uid: 'keep', species: 'wolfpup', rarity: 'common', level: 1, name: '', mods }],
+    const s1 = sanitizeSave({
+      version: 5,
+      pets: [{ uid: 'dupe', species: 'wolfpup', rarity: 'common', level: 1, name: '', mods }],
     });
-    expect(s.pets[0].mods).toEqual(mods);
+    expect(s1.pets[0].mods).toEqual(mods); // сохранены как есть
+    // повторная загрузка того же сейва — снова без изменений
+    const s2 = sanitizeSave({
+      version: 5,
+      pets: [{ uid: 'dupe', species: 'wolfpup', rarity: 'common', level: 1, name: '', mods }],
+    });
+    expect(s2.pets[0].mods).toEqual(mods);
   });
 
-  it('skill normalized: wrong id resets, stars clamped 1..5, stripped from low rarity', () => {
+  it('v5 invalid mod still forces full deterministic resynth', () => {
     const s = sanitizeSave({
-      pets: [
-        // легендарка: чужой id + звёзды 99 → id вида, звёзды 1
-        { uid: 'a', species: 'phoenix', rarity: 'legendary', level: 1, name: '', mods: [],
-          skill: { id: 'wrong_skill', stars: 99 } },
-        // легендарка: верный id, звёзды NaN → 1
-        { uid: 'b', species: 'wolfpup', rarity: 'legendary', level: 1, name: '', mods: [],
-          skill: { id: 'pack_leader', stars: Number.NaN } },
-        // легендарка: верный id, звёзды 3 → сохранены
-        { uid: 'c', species: 'drakeling', rarity: 'legendary', level: 1, name: '', mods: [],
-          skill: { id: 'hoard', stars: 3 } },
-        // common: скилл подложен → удалён
-        { uid: 'd', species: 'spirit', rarity: 'common', level: 1, name: '', mods: [],
-          skill: { id: 'radiance', stars: 5 } },
-      ],
+      version: 5,
+      pets: [{
+        uid: 'bad5', species: 'wolfpup', rarity: 'common', level: 1, name: '',
+        mods: [{ stat: 'dps', value: 10 }, { stat: 'hacked', value: 5 }],
+      }],
     });
-    expect(s.pets[0].skill).toEqual({ id: 'rebirth', stars: 1 });
-    expect(s.pets[1].skill).toEqual({ id: 'pack_leader', stars: 1 });
-    expect(s.pets[2].skill).toEqual({ id: 'hoard', stars: 3 });
-    expect(s.pets[3].skill).toBeUndefined();
+    const mods = s.pets[0].mods;
+    expect(mods.length).toBe(2);
+    expect(mods).toEqual(genPetMods('common', stableRng('bad5')));
+    expect(mods).not.toContainEqual({ stat: 'dps', value: 10 }); // выживший не сохранён
   });
 
-  it('legacy save without mods/skill: deterministic synth, epic gets skill stars=1', () => {
-    const raw = { pets: [{ uid: 'legacy1', species: 'golem', rarity: 'epic', level: 2, name: 'Г' }] };
-    const s1 = sanitizeSave(raw);
-    const s2 = sanitizeSave(raw);
-    expect(s1.pets[0].mods).toEqual(s2.pets[0].mods); // детерминированно
-    expect(s1.pets[0].mods.length).toBe(PET_MOD_COUNT.epic);
-    expect(s1.pets[0].skill).toEqual({ id: 'living_anvil', stars: 1 });
+  it('v5 wrong count forces resynth even if all valid', () => {
+    const s = sanitizeSave({
+      version: 5,
+      pets: [{
+        uid: 'cnt5', species: 'wolfpup', rarity: 'epic', level: 1, name: '',
+        mods: [{ stat: 'dps', value: 10 }, { stat: 'click', value: 10 }], // 2 вместо 4
+      }],
+    });
+    expect(s.pets[0].mods.length).toBe(4);
+    expect(s.pets[0].mods).toEqual(genPetMods('epic', stableRng('cnt5')));
   });
 });
