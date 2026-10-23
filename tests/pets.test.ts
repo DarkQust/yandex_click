@@ -327,3 +327,102 @@ describe('v4 -> v5 migration', () => {
     expect(s.pets[0].mods).toEqual(genPetMods('epic', stableRng('cnt5')));
   });
 });
+
+describe('A5.1-fix4: restored checks (v5 saves)', () => {
+  // --- 1. petEfficiency усиливает ВСЕ эффекты активных питомцев, включая врождённый бонус ---
+  it('petEfficiency secret affix amplifies innate bonus and mods together', () => {
+    const s = new GameState();
+    s.data.grid = [{ branch: 'sword', tier: 3 }];
+    // база БЕЗ питомца: innate не должен учитываться дважды
+    const bareDps = s.totalDps();
+    const bareIncome = s.incomePerSec();
+
+    const pet = {
+      ...mkPet('wolfpup', 'common'), // врождённый: dps +8%
+      mods: [{ stat: 'income', value: 20 } as PetMod], // мод: доход +20%
+    };
+    s.data.pets = [pet];
+    s.data.activePetIds = [pet.uid];
+    // без petEfficiency: innate 8% → ДПС ×1.08, мод 20% → доход ×1.2
+    expect(s.totalDps()).toBeCloseTo(bareDps * 1.08, 3);
+    expect(s.incomePerSec()).toBeCloseTo(bareIncome * 1.2, 3);
+
+    // экипируем артефакт с secret-аффиксом petEfficiency +50%:
+    // innate 8×1.5=12% → ДПС ×1.12; мод 20×1.5=30% → доход ×1.3
+    s.data.artifacts = [
+      { id: 'pe', name: '', rarity: 'epic', createdAt: 0,
+        affixes: [{ stat: 'petEfficiency', value: 50, secret: true }] },
+    ];
+    s.data.equippedIds = ['pe'];
+    expect(s.totalDps()).toBeCloseTo(bareDps * 1.12, 3);
+    expect(s.incomePerSec()).toBeCloseTo(bareIncome * 1.3, 3);
+
+    // сняли артефакт — эффекты вернулись к ×1.08 / ×1.2
+    s.data.artifacts = [];
+    s.data.equippedIds = [];
+    expect(s.totalDps()).toBeCloseTo(bareDps * 1.08, 3);
+    expect(s.incomePerSec()).toBeCloseTo(bareIncome * 1.2, 3);
+  });
+
+  // --- 2. Валидация модов: неизвестный стат / отрицательное / сверхкаповое значение ---
+  it('v5 save: unknown stat rejected → full resynth', () => {
+    const s = sanitizeSave({
+      version: 5,
+      pets: [{ uid: 'u1', species: 'wolfpup', rarity: 'common', level: 1, name: '',
+        mods: [{ stat: 'hacked_stat', value: 50 }, { stat: 'dps', value: 10 }] }],
+    });
+    expect(s.pets[0].mods).toEqual(genPetMods('common', stableRng('u1'))); // пересинтез
+    expect(s.pets[0].mods).not.toContainEqual({ stat: 'dps', value: 10 });
+  });
+
+  it('v5 save: negative value rejected → full resynth', () => {
+    const s = sanitizeSave({
+      version: 5,
+      pets: [{ uid: 'u2', species: 'wolfpup', rarity: 'common', level: 1, name: '',
+        mods: [{ stat: 'dps', value: -15 }, { stat: 'income', value: 10 }] }],
+    });
+    expect(s.pets[0].mods).toEqual(genPetMods('common', stableRng('u2')));
+    expect(s.pets[0].mods.every((m) => m.value > 0)).toBe(true);
+  });
+
+  it('v5 save: over-cap value rejected → full resynth', () => {
+    const s = sanitizeSave({
+      version: 5,
+      pets: [{ uid: 'u3', species: 'wolfpup', rarity: 'common', level: 1, name: '',
+        mods: [{ stat: 'dps', value: 9999999 }, { stat: 'income', value: 10 }] }],
+    });
+    expect(s.pets[0].mods).toEqual(genPetMods('common', stableRng('u3')));
+    expect(s.pets[0].mods.every((m) => m.value <= 10000)).toBe(true);
+  });
+
+  // --- 3. Валидация уникальных пассивов в сейвах v5 ---
+  it('v5 save: skill id normalized, NaN/capped stars, valid stars kept, low-rarity stripped', () => {
+    const s = sanitizeSave({
+      version: 5,
+      pets: [
+        // легендарка: чужой ID → нормализован к виду, звёзды сброшены на 1
+        { uid: 's1', species: 'phoenix', rarity: 'legendary', level: 1, name: '', mods: [],
+          skill: { id: 'wrong_skill', stars: 3 } },
+        // легендарка: верный ID, звёзды NaN → 1
+        { uid: 's2', species: 'wolfpup', rarity: 'legendary', level: 1, name: '', mods: [],
+          skill: { id: 'pack_leader', stars: Number.NaN } },
+        // легендарка: верный ID, завышенные звёзды 99 → кап 5
+        { uid: 's3', species: 'drakeling', rarity: 'legendary', level: 1, name: '', mods: [],
+          skill: { id: 'hoard', stars: 99 } },
+        // эпик: верный ID, валидные 3 звезды → сохранены
+        { uid: 's4', species: 'golem', rarity: 'epic', level: 1, name: '', mods: [],
+          skill: { id: 'living_anvil', stars: 3 } },
+        // common: подложенный пассив → удалён
+        { uid: 's5', species: 'spirit', rarity: 'common', level: 1, name: '', mods: [],
+          skill: { id: 'radiance', stars: 5 } },
+      ],
+    });
+    expect(s.pets[0].skill).toEqual({ id: 'rebirth', stars: 1 });
+    expect(s.pets[1].skill).toEqual({ id: 'pack_leader', stars: 1 });
+    expect(s.pets[2].skill).toEqual({ id: 'hoard', stars: 5 });
+    expect(s.pets[3].skill).toEqual({ id: 'living_anvil', stars: 3 });
+    expect(s.pets[4].skill).toBeUndefined();
+    // бонус считается от нормализованных звёзд (не от 99)
+    expect(petSkillBonus(s.pets[2] as Pet)!.value).toBeCloseTo(PET_SKILLS.drakeling.perStar * 5, 1);
+  });
+});
